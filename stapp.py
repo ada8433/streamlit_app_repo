@@ -230,7 +230,7 @@ def preprocess_data(file) -> pd.DataFrame:
     string_cols = ["联系电话", "求诊者身份证号"]
     for col in string_cols:
         if col in df.columns:
-            df[col] = df[col].astype(str)
+            df[col] = df[col].astype(str).str.replace(r"\D+", "", regex=True)
 
     # 2. Parse submission time
     if "提交答卷时间" in df.columns:
@@ -292,6 +292,13 @@ def preprocess_data(file) -> pd.DataFrame:
 # ---------------------------------------------------------
 # Helper Functions
 # ---------------------------------------------------------
+# slice phone numbers into easy-to-read format
+def phone_num_slicer(phone):
+    phone = str(phone).strip()
+    phone_slice = [phone[:3], phone[3:7], phone[7:]]
+    return " ".join(phone_slice)
+
+
 # get diagnoses
 def get_diagnoses(diagnosis_columns, person):
     prev_diagnoses = []
@@ -344,12 +351,6 @@ def previous_patient():
         st.session_state.patient_idx -= 1
 
 
-# slice phone numbers into easy-to-read format
-def phone_num_slicer(phone):
-    phone_slice = [phone[:3], phone[3:7], phone[7:]]
-    return " ".join(phone_slice)
-
-
 # ---------------------------------------------------------
 # Main Execution Flow
 # ---------------------------------------------------------
@@ -361,324 +362,308 @@ if not uploaded_file:
 
 df = preprocess_data(uploaded_file)
 
-# Sidebar: filter
+# ------------ Sidebar filters-------------
 st.sidebar.header("🔍 档案检索")
-try:
-    # ------------Filter By Date---------------
-    # 1. Convert column to datetime format
-    df["提交答卷时间"] = pd.to_datetime(df["提交答卷时间"])
 
-    # 2. Add a date range picker in the sidebar
-    date_range = st.sidebar.date_input(
-        "📅 登记日期范围",
-        value=(df["提交答卷时间"].min().date(), df["提交答卷时间"].max().date()),
+# Filter By Date
+# 1. Convert column to datetime format
+df["提交答卷时间"] = pd.to_datetime(df["提交答卷时间"])
+
+# 2. Add a date range picker in the sidebar
+date_range = st.sidebar.date_input(
+    "📅 登记日期范围",
+    value=(df["提交答卷时间"].min().date(), df["提交答卷时间"].max().date()),
+)
+
+# 3. Apply filter when both start and end dates are picked
+if len(date_range) == 2:
+    start_date, end_date = date_range
+
+    filtered_df = df[
+        (df["提交答卷时间"].dt.date >= start_date)
+        & (df["提交答卷时间"].dt.date <= end_date)
+    ]
+else:
+    filtered_df = df
+
+# Filter By Treatment Type
+treatment_col = "请选择您需要预约登记的治疗方式"
+if treatment_col in filtered_df.columns:
+    all_treatments = filtered_df[treatment_col].dropna().unique().tolist()
+    selected_treatments = st.sidebar.multiselect(
+        "🛋️ 预约治疗方式", options=all_treatments, default=all_treatments
     )
+    if selected_treatments:
+        filtered_df = filtered_df[filtered_df[treatment_col].isin(selected_treatments)]
 
-    # 3. Apply filter when both start and end dates are picked
-    if len(date_range) == 2:
-        start_date, end_date = date_range
+# Filter By Sex
+sex_col = "性别"
+if sex_col in filtered_df.columns:
+    all_sex = filtered_df[sex_col].dropna().unique().tolist()
+    selected_sex = st.sidebar.multiselect("💁性别", options=all_sex, default=all_sex)
+    if selected_sex:
+        filtered_df = filtered_df[filtered_df[sex_col].isin(selected_sex)]
 
-        filtered_df = df[
-            (df["提交答卷时间"].dt.date >= start_date)
-            & (df["提交答卷时间"].dt.date <= end_date)
-        ]
-    else:
-        filtered_df = df
+if filtered_df.empty:
+    st.warning("⚠️ 当前筛选条件下未找到求诊者记录。")
+    st.stop()
 
-    # ------------Filter By Treatment Type----------
-    treatment_col = "请选择您需要预约登记的治疗方式"
-    if treatment_col in filtered_df.columns:
-        all_treatments = filtered_df[treatment_col].dropna().unique().tolist()
-        selected_treatments = st.sidebar.multiselect(
-            "🛋️ 预约治疗方式", options=all_treatments, default=all_treatments
-        )
-        if selected_treatments:
-            filtered_df = filtered_df[
-                filtered_df[treatment_col].isin(selected_treatments)
-            ]
 
-    # ------------Filter By Sex----------
-    sex_col = "性别"
-    if sex_col in filtered_df.columns:
-        all_sex = filtered_df[sex_col].dropna().unique().tolist()
-        selected_sex = st.sidebar.multiselect(
-            "💁性别", options=all_sex, default=all_sex
-        )
-        if selected_sex:
-            filtered_df = filtered_df[filtered_df[sex_col].isin(selected_sex)]
+# Main page: search
+# 2. Initialize current patient index in session_state
+name_options = (
+    filtered_df["姓名（实名）"].astype(str)
+    + " ("
+    + filtered_df["提交答卷时间"].astype(str)
+    + ")"
+).tolist()
+if "patient_idx" not in st.session_state:
+    st.session_state.patient_idx = 0
 
-    if filtered_df.empty:
-        st.sidebar.warning("该日期范围内无求诊者记录")
-    else:
-        # Main page: search
-        # 2. Initialize current patient index in session_state
-        name_options = (
+# Ensure index stays within bounds if the filtered list shrinks
+if st.session_state.patient_idx >= len(name_options):
+    st.session_state.patient_idx = 0
+
+# 3. Previous / Next Buttons Layout
+col_prev, col_dropdown, col_next = st.columns([1, 5, 1], vertical_alignment="bottom")
+
+with col_prev:
+    if st.button(
+        "上一位",
+        on_click=previous_patient,
+    ):
+        st.rerun()
+
+with col_next:
+    if st.button(
+        "下一位",
+        on_click=next_patient,
+    ):
+        st.rerun()
+
+with col_dropdown:
+    selected_name = st.selectbox(
+        "🔍 选择/输入求诊者姓名（预约提交时间）",
+        options=name_options,
+        index=st.session_state.patient_idx,
+    )
+    if selected_name:
+        st.session_state.patient_idx = name_options.index(selected_name)
+        person = filtered_df[
             filtered_df["姓名（实名）"].astype(str)
             + " ("
             + df["提交答卷时间"].astype(str)
             + ")"
-        ).tolist()
-        if "patient_idx" not in st.session_state:
-            st.session_state.patient_idx = 0
+            == selected_name
+        ].iloc[0]
+# 4. Pull the active person record
+person = filtered_df.iloc[st.session_state.patient_idx]
 
-        # Ensure index stays within bounds if the filtered list shrinks
-        if st.session_state.patient_idx >= len(name_options):
-            st.session_state.patient_idx = 0
+st.caption(
+    f"当前第 **{st.session_state.patient_idx + 1}** / **{len(name_options)}** 位求诊者"
+)
 
-        # 3. Previous / Next Buttons Layout
-        col_prev, col_dropdown, col_next = st.columns(
-            [1, 5, 1], vertical_alignment="bottom"
-        )
-
-        with col_prev:
-            if st.button(
-                "上一位",
-                on_click=previous_patient,
-            ):
-                st.rerun()
-
-        with col_next:
-            if st.button(
-                "下一位",
-                on_click=next_patient,
-            ):
-                st.rerun()
-
-        with col_dropdown:
-            selected_name = st.selectbox(
-                "🔍 选择/输入求诊者姓名（预约提交时间）",
-                options=name_options,
-                index=st.session_state.patient_idx,
-            )
-            if selected_name:
-                st.session_state.patient_idx = name_options.index(selected_name)
-                person = filtered_df[
-                    filtered_df["姓名（实名）"].astype(str)
-                    + " ("
-                    + df["提交答卷时间"].astype(str)
-                    + ")"
-                    == selected_name
-                ].iloc[0]
-        # 4. Pull the active person record
-        person = filtered_df.iloc[st.session_state.patient_idx]
-
-        st.caption(
-            f"当前第 **{st.session_state.patient_idx + 1}** / **{len(name_options)}** 位求诊者"
-        )
-
-except Exception as e:
-    st.info(f"{e}")
 
 # ---------------------------------------------------------
 # Main View: Structured Sections
 # ---------------------------------------------------------
-try:
-    # Key Highlights Banner
-    phone_number = phone_num_slicer(person.get("联系电话", "-"))
-    st.title(
-        f"👤 {person.get('姓名（实名）', '未知')} | \
-                    {person.get('年龄', '未填')} 岁| \
-                    {person.get('性别', '未填')} |\
-                    {phone_number}\
-                    :violet-badge[💬 {person.get('请选择您需要预约登记的治疗方式')}]\
-                    :blue-badge[{person.get('电话评估治疗师', '-')}]"
+
+# Key Highlights Banner
+phone_number = phone_num_slicer(person.get("联系电话", "-"))
+st.title(
+    f"👤 {person.get('姓名（实名）', '未知')} | \
+                {person.get('年龄', '未填')} 岁| \
+                {person.get('性别', '未填')} |\
+                {phone_number}\
+                :violet-badge[💬 {person.get('请选择您需要预约登记的治疗方式')}]\
+                :blue-badge[{person.get('电话评估治疗师', '-')}]"
+)
+
+main = st.container()
+
+diagnoses_list = get_diagnoses(df.columns[30:37], person)
+display = ""
+for d in diagnoses_list:
+    display += f":red-badge[{d}] "
+main.write(f"{display}")
+
+col1, col2, col3 = main.columns(3)
+
+col1.metric(
+    label="抑郁筛查量表 (PHQ-9)",
+    value=f"{int(person['PHQ_Total'])} / 27",
+)
+col2.metric(
+    label="广泛性焦虑量表 (GAD-7)",
+    value=f"{int(person['GAD_Total'])} / 21",
+)
+
+col3.metric(label="失眠严重程度量表 (ISI)", value=f"{int(person['ISI_TOTAL'])}/28")
+
+# Check for safety / risk indicators (Self-harm / Suicide)
+risk_cols = [c for c in df.columns if "25(" in c]
+active_risks = [
+    c.replace("25(", "").replace(")", "")
+    for c in risk_cols
+    if person.get(c) == 1 or person.get(c) == "是"
+]
+
+if any(r in ["自伤意念", "自伤行为", "自杀意念", "自杀想法"] for r in active_risks):
+    main.error(f"⚠️ 风险预警指标: {', '.join(active_risks)}")
+
+# 电话评估后的信息变更
+st.markdown("---")
+st.markdown("### 📑 电话评估信息")
+edited_df = st.data_editor(
+    df.loc[
+        [person.name],
+        df.columns[119:124],
+    ],
+    hide_index=True,
+    num_rows="fixed",
+)
+
+# if st.button("提交", type="primary", width="stretch"):
+#     df.update(edited_df)
+#     df.to_excel(uploaded_file.name, index=False)
+
+# Update only the edited cells in the main dataframe
+
+# Save back to disk
+
+# Organize 112 columns into Tabs
+tab1, tab2, tab3, tab4, tab5 = main.tabs(
+    [
+        "1. 基本信息与联络",
+        "2. 临床表现与用药史",
+        "3. 量表评估结果",
+        "4. 社会支持网络",
+        "5. 治疗目标与预约",
+    ]
+)
+
+# ---------------------------------------------------------
+# TAB 1: Basic Info & Contacts
+# ---------------------------------------------------------
+with tab1:
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown("### 🆔 身份证明")
+        st.write(f"**姓名**：{person.get('姓名（实名）', '-')}")
+        st.write(f"**身份证号**：{person.get('求诊者身份证号', '-')}")
+        st.write(f"**联系电话**：{person.get('联系电话', '-')}")
+        st.write(f"**常住地**：{person.get('您的常住地为', '-')}")
+        st.write(f"**户籍地**：{person.get('您的户籍所在地', '-')}")
+
+    with col2:
+        st.markdown("### 🎓 社会人口学资料")
+        st.write(f"**教育水平**：{person.get('教育水平', '-')}")
+        st.write(f"**职业**：{person.get('职业', '-')}")
+        st.write(f"**年级**：{person.get('年级', '-')}")
+        st.write(f"**休学/离职状态**：{person.get('目前是否已经休学/休假或离职', '-')}")
+        st.write(
+            f"**婚姻/生育状态**：{person.get('婚姻状态', '-')}, {person.get('生育状态', '-')} (孩子数: {person.get('孩子个数', '-')})"
+        )
+
+    with col3:
+        st.markdown("### 📞 紧急联系人")
+        st.write(f"**紧急联系人**：{person.get('紧急联系人的姓名', '-')}")
+        st.write(f"**关系**：{person.get('紧急联系人与来访的关系：', '-')}")
+        st.write(f"**联系电话**：{person.get('紧急联系人电话（手机号）', '-')}")
+
+# ---------------------------------------------------------
+# TAB 2: Clinical & Medication History
+# ---------------------------------------------------------
+with tab2:
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("### 🏥 诊疗背景")
+        st.write(f"**病程（月）**：{person.get('病程（月）', '-')}")
+        st.write(f"**首次来院年份**：{person.get('首次来我院就诊年份', '-')}")
+        st.write(f"**本院就诊经历**：{person.get('是否曾在本院心理咨询门诊就诊', '-')}")
+        st.write(
+            f"**重大生活事件**：{person.get('半年内是否经历重大生活事件', '-')} ({person.get('请注明具体事件', '无说明')})"
+        )
+        st.write(f"**家族史**：{person.get('是否有精神/心理疾病家族史', '-')}")
+        st.write(f"**躯体疾病**：{person.get('是否有躯体疾病', '-')}")
+
+    with col2:
+        st.markdown("### 💊 药物使用与安全状态")
+        st.write(f"**目前是否服药**：{person.get('目前是否在服用精神科药物', '-')}")
+        st.write(
+            f"**药物名称/时间/剂量**：{person.get('服用药物名称，服用时间，剂量', '-')}"
+        )
+        st.write(f"**未服药情况**：{person.get('未服药情况', '-')}")
+
+        # Symptoms list
+        symptoms_cols = [c for c in df.columns if "19(" in c]
+        present_symptoms = [
+            c.replace("19(", "").replace(")", "")
+            for c in symptoms_cols
+            if person.get(c) == 1 or person.get(c) == "是"
+        ]
+        st.write(
+            f"**当前主诉/症状**：{', '.join(present_symptoms) if present_symptoms else '无特异记录'}"
+        )
+
+# ---------------------------------------------------------
+# TAB 3: Scales (PHQ-9, GAD-7, ISI)
+# ---------------------------------------------------------
+with tab3:
+    phq_cols = df.columns[PHQ_FIELDS[0] : PHQ_FIELDS[1]]
+    gad_cols = df.columns[GAD_FIELDS[0] : GAD_FIELDS[1]]
+
+    # Raw option text mapping back to scores (0..3)
+    phq_scores = [TEXT_TO_SCORE.get(person[c], 0) for c in phq_cols]
+    gad_scores = [TEXT_TO_SCORE.get(person[c], 0) for c in gad_cols]
+    st.markdown("### 📝 抑郁与焦虑自评（PHQ-9 & GAD-7）")
+    c1, c2 = st.columns(2, gap="medium", border=True)
+    with c1:
+        plot_scale_breakdown(
+            phq_labels, phq_scores, max_score=3, title="PHQ-9 抑郁症状条目得分"
+        )
+        st.write(f"#### PHQ总分：{person.get('PHQ_Total', '-')}")
+        st.markdown("#### PHQ-9 项目摘要")
+        for c in phq_cols[:9]:
+            st.write(f"• **{c.split('—')[-1]}**: {person.get(c, '-')}")
+
+    with c2:
+        plot_scale_breakdown(
+            gad_labels, gad_scores, max_score=3, title="GAD-7 焦虑症状条目得分"
+        )
+        st.write(f"#### GAD总分：{person.get('GAD_Total', '-')}")
+        st.markdown("#### GAD-7 项目摘要")
+        for c in gad_cols[:7]:
+            st.write(f"• **{c.split('—')[-1]}**: {person.get(c, '-')}")
+
+# ---------------------------------------------------------
+# TAB 4: Social Support Network
+# ---------------------------------------------------------
+with tab4:
+    st.markdown("### 🤝 社会支持评估")
+    st.write(
+        f"**密切联系的朋友数**：{person.get('您有多少关系密切，可以得到支持和帮助的朋友？（只选一项）', '-')}"
+    )
+    st.write(
+        f"**倾诉意愿**：{person.get('您遇到烦恼时会主动倾诉吗：（只选一项）', '-')} | **主要倾诉对象：** {person.get('下列来源中哪一项是您遇到烦恼时最主要倾诉对象？（只选一项）', '-')}"
     )
 
-    main = st.container()
-
-    diagnoses_list = get_diagnoses(df.columns[30:37], person)
-    display = ""
-    for d in diagnoses_list:
-        display += f":red-badge[{d}] "
-    main.write(f"{display}")
-
-    col1, col2, col3 = main.columns(3)
-
-    col1.metric(
-        label="抑郁筛查量表 (PHQ-9)",
-        value=f"{int(person['PHQ_Total'])} / 27",
-    )
-    col2.metric(
-        label="广泛性焦虑量表 (GAD-7)",
-        value=f"{int(person['GAD_Total'])} / 21",
-    )
-
-    col3.metric(label="失眠严重程度量表 (ISI)", value=f"{int(person['ISI_TOTAL'])}/28")
-
-    # Check for safety / risk indicators (Self-harm / Suicide)
-    risk_cols = [c for c in df.columns if "25(" in c]
-    active_risks = [
-        c.replace("25(", "").replace(")", "")
-        for c in risk_cols
-        if person.get(c) == 1 or person.get(c) == "是"
+# ---------------------------------------------------------
+# TAB 5: Treatment Goals & Preferences
+# ---------------------------------------------------------
+with tab5:
+    st.markdown("### 🎯 治疗目标与诉求")
+    goal_cols = [c for c in df.columns if "目标(" in c]
+    selected_goals = [
+        c.replace("目标(", "").replace(")", "") for c in goal_cols if person.get(c) == 1
     ]
 
-    if any(r in ["自伤意念", "自伤行为", "自杀意念", "自杀想法"] for r in active_risks):
-        main.error(f"⚠️ 风险预警指标: {', '.join(active_risks)}")
-
-    # 电话评估后的信息变更
-    st.markdown("---")
-    st.markdown("### 📑 电话评估信息")
-    edited_df = st.data_editor(
-        df.loc[
-            [person.name],
-            df.columns[119:124],
-        ],
-        hide_index=True,
-        num_rows="fixed",
+    st.write(
+        f"**心理治疗目标**：{' | '.join(selected_goals) if selected_goals else '未明确选定'}"
     )
-
-    # if st.button("提交", type="primary", width="stretch"):
-    #     df.update(edited_df)
-    #     df.to_excel(uploaded_file.name, index=False)
-
-    # Update only the edited cells in the main dataframe
-
-    # Save back to disk
-
-    # Organize 112 columns into Tabs
-    tab1, tab2, tab3, tab4, tab5 = main.tabs(
-        [
-            "1. 基本信息与联络",
-            "2. 临床表现与用药史",
-            "3. 量表评估结果",
-            "4. 社会支持网络",
-            "5. 治疗目标与预约",
-        ]
+    st.write(
+        f"**预约登记的治疗方式**：{person.get('请选择您需要预约登记的治疗方式', '-')}"
     )
-
-    # ---------------------------------------------------------
-    # TAB 1: Basic Info & Contacts
-    # ---------------------------------------------------------
-    with tab1:
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.markdown("### 🆔 身份证明")
-            st.write(f"**姓名**：{person.get('姓名（实名）', '-')}")
-            st.write(f"**身份证号**：{person.get('求诊者身份证号', '-')}")
-            st.write(f"**联系电话**：{person.get('联系电话', '-')}")
-            st.write(f"**常住地**：{person.get('您的常住地为', '-')}")
-            st.write(f"**户籍地**：{person.get('您的户籍所在地', '-')}")
-
-        with col2:
-            st.markdown("### 🎓 社会人口学资料")
-            st.write(f"**教育水平**：{person.get('教育水平', '-')}")
-            st.write(f"**职业**：{person.get('职业', '-')}")
-            st.write(f"**年级**：{person.get('年级', '-')}")
-            st.write(
-                f"**休学/离职状态**：{person.get('目前是否已经休学/休假或离职', '-')}"
-            )
-            st.write(
-                f"**婚姻/生育状态**：{person.get('婚姻状态', '-')}, {person.get('生育状态', '-')} (孩子数: {person.get('孩子个数', '-')})"
-            )
-
-        with col3:
-            st.markdown("### 📞 紧急联系人")
-            st.write(f"**紧急联系人**：{person.get('紧急联系人的姓名', '-')}")
-            st.write(f"**关系**：{person.get('紧急联系人与来访的关系：', '-')}")
-            st.write(f"**联系电话**：{person.get('紧急联系人电话（手机号）', '-')}")
-
-    # ---------------------------------------------------------
-    # TAB 2: Clinical & Medication History
-    # ---------------------------------------------------------
-    with tab2:
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown("### 🏥 诊疗背景")
-            st.write(f"**病程（月）**：{person.get('病程（月）', '-')}")
-            st.write(f"**首次来院年份**：{person.get('首次来我院就诊年份', '-')}")
-            st.write(
-                f"**本院就诊经历**：{person.get('是否曾在本院心理咨询门诊就诊', '-')}"
-            )
-            st.write(
-                f"**重大生活事件**：{person.get('半年内是否经历重大生活事件', '-')} ({person.get('请注明具体事件', '无说明')})"
-            )
-            st.write(f"**家族史**：{person.get('是否有精神/心理疾病家族史', '-')}")
-            st.write(f"**躯体疾病**：{person.get('是否有躯体疾病', '-')}")
-
-        with col2:
-            st.markdown("### 💊 药物使用与安全状态")
-            st.write(f"**目前是否服药**：{person.get('目前是否在服用精神科药物', '-')}")
-            st.write(
-                f"**药物名称/时间/剂量**：{person.get('服用药物名称，服用时间，剂量', '-')}"
-            )
-            st.write(f"**未服药情况**：{person.get('未服药情况', '-')}")
-
-            # Symptoms list
-            symptoms_cols = [c for c in df.columns if "19(" in c]
-            present_symptoms = [
-                c.replace("19(", "").replace(")", "")
-                for c in symptoms_cols
-                if person.get(c) == 1 or person.get(c) == "是"
-            ]
-            st.write(
-                f"**当前主诉/症状**：{', '.join(present_symptoms) if present_symptoms else '无特异记录'}"
-            )
-
-    # ---------------------------------------------------------
-    # TAB 3: Scales (PHQ-9, GAD-7, ISI)
-    # ---------------------------------------------------------
-    with tab3:
-        phq_cols = df.columns[PHQ_FIELDS[0] : PHQ_FIELDS[1]]
-        gad_cols = df.columns[GAD_FIELDS[0] : GAD_FIELDS[1]]
-
-        # Raw option text mapping back to scores (0..3)
-        phq_scores = [TEXT_TO_SCORE.get(person[c], 0) for c in phq_cols]
-        gad_scores = [TEXT_TO_SCORE.get(person[c], 0) for c in gad_cols]
-        st.markdown("### 📝 抑郁与焦虑自评（PHQ-9 & GAD-7）")
-        c1, c2 = st.columns(2, gap="medium", border=True)
-        with c1:
-            plot_scale_breakdown(
-                phq_labels, phq_scores, max_score=3, title="PHQ-9 抑郁症状条目得分"
-            )
-            st.write(f"#### PHQ总分：{person.get('PHQ_Total', '-')}")
-            st.markdown("#### PHQ-9 项目摘要")
-            for c in phq_cols[:9]:
-                st.write(f"• **{c.split('—')[-1]}**: {person.get(c, '-')}")
-
-        with c2:
-            plot_scale_breakdown(
-                gad_labels, gad_scores, max_score=3, title="GAD-7 焦虑症状条目得分"
-            )
-            st.write(f"#### GAD总分：{person.get('GAD_Total', '-')}")
-            st.markdown("#### GAD-7 项目摘要")
-            for c in gad_cols[:7]:
-                st.write(f"• **{c.split('—')[-1]}**: {person.get(c, '-')}")
-
-    # ---------------------------------------------------------
-    # TAB 4: Social Support Network
-    # ---------------------------------------------------------
-    with tab4:
-        st.markdown("### 🤝 社会支持评估")
-        st.write(
-            f"**密切联系的朋友数**：{person.get('您有多少关系密切，可以得到支持和帮助的朋友？（只选一项）', '-')}"
-        )
-        st.write(
-            f"**倾诉意愿**：{person.get('您遇到烦恼时会主动倾诉吗：（只选一项）', '-')} | **主要倾诉对象：** {person.get('下列来源中哪一项是您遇到烦恼时最主要倾诉对象？（只选一项）', '-')}"
-        )
-
-    # ---------------------------------------------------------
-    # TAB 5: Treatment Goals & Preferences
-    # ---------------------------------------------------------
-    with tab5:
-        st.markdown("### 🎯 治疗目标与诉求")
-        goal_cols = [c for c in df.columns if "目标(" in c]
-        selected_goals = [
-            c.replace("目标(", "").replace(")", "")
-            for c in goal_cols
-            if person.get(c) == 1
-        ]
-
-        st.write(
-            f"**心理治疗目标**：{' | '.join(selected_goals) if selected_goals else '未明确选定'}"
-        )
-        st.write(
-            f"**预约登记的治疗方式**：{person.get('请选择您需要预约登记的治疗方式', '-')}"
-        )
-        st.write(f"**过去心理咨询经历**：{person.get('过去心理咨询', '-')}")
-        st.write(
-            f"**电话评估治疗师**：:blue-badge[{person.get('电话评估治疗师', '-')}]"
-        )
-        st.info(f"**其他备注信息**：{person.get('其他需要备注说明的信息：', '无')}")
-except Exception as e:
-    st.warning(f"请检查日期，该日期范围内无求诊者记录 {e}")
+    st.write(f"**过去心理咨询经历**：{person.get('过去心理咨询', '-')}")
+    st.write(f"**电话评估治疗师**：:blue-badge[{person.get('电话评估治疗师', '-')}]")
+    st.info(f"**其他备注信息**：{person.get('其他需要备注说明的信息：', '无')}")
