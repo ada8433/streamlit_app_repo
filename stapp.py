@@ -227,7 +227,7 @@ def preprocess_data(file) -> pd.DataFrame:
     df = pd.read_csv(file) if file.name.endswith(".csv") else pd.read_excel(file)
 
     # 1. Standardize string identifier columns
-    string_cols = ["联系电话", "求诊者身份证号", "紧急联系人电话（手机号）"]
+    string_cols = ["联系电话", "求诊者身份证号"]
     for col in string_cols:
         if col in df.columns:
             df[col] = df[col].astype(str)
@@ -252,15 +252,26 @@ def preprocess_data(file) -> pd.DataFrame:
         if len(df.columns) >= ISI_FIELDS[1]
         else []
     )
-    df["PHQ_Total"] = (
-        df[phq_cols].apply(pd.to_numeric, errors="coerce").fillna(0).sum(axis=1) - 9
-    )
-    df["GAD_Total"] = (
-        df[gad_cols].apply(pd.to_numeric, errors="coerce").fillna(0).sum(axis=1) - 7
-    )
-    df["ISI_TOTAL"] = (
-        df[isi_cols].apply(pd.to_numeric, errors="coerce").fillna(0).sum(axis=1) - 7
-    )
+
+    # 4. Standardize Survey Scales (Assumes input 1-4 mapped to 0-3)
+    for prefix, cols in [
+        ("_phq_score_", phq_cols),
+        ("_gad_score_", gad_cols),
+        ("_isi_score_", isi_cols),
+    ]:
+        for idx, col in enumerate(cols):
+            numeric_s = pd.to_numeric(df[col], errors="coerce").fillna(1)
+            # Normalize 1-4 scale down to 0-3 standard Likert score
+            df[f"{prefix}{idx}"] = (numeric_s - 1).clip(lower=0, upper=3).astype(int)
+
+    # Calculate Total Scores
+    phq_score_cols = [f"_phq_score_{i}" for i in range(len(phq_cols))]
+    gad_score_cols = [f"_gad_score_{i}" for i in range(len(gad_cols))]
+    isi_score_cols = [f"_isi_score_{i}" for i in range(len(isi_cols))]
+
+    df["PHQ_Total"] = df[phq_score_cols].sum(axis=1) if phq_score_cols else 0
+    df["GAD_Total"] = df[gad_score_cols].sum(axis=1) if gad_score_cols else 0
+    df["ISI_TOTAL"] = df[isi_score_cols].sum(axis=1) if isi_score_cols else 0
 
     # Map number key to readable values from dictionary
 
@@ -349,10 +360,6 @@ if not uploaded_file:
     st.stop()
 
 df = preprocess_data(uploaded_file)
-
-# ---------------------------------------------------------
-# Filter & Search
-# ---------------------------------------------------------
 
 # Sidebar: filter
 st.sidebar.header("🔍 档案检索")
