@@ -1,5 +1,3 @@
-from turtle import onclick
-
 import streamlit as st
 import pandas as pd
 import datetime
