@@ -1,7 +1,8 @@
-import streamlit as st
-import pandas as pd
 import datetime
 import altair as alt
+import numpy as np
+import pandas as pd
+import streamlit as st
 
 # Page setup
 st.set_page_config(page_title="门诊预约Dashboard", page_icon="📋", layout="wide")
@@ -221,21 +222,36 @@ ISI_FIELDS = [65, 72]
 # Preprocess and load adta
 # ---------------------------------------------------------
 # Preprocess function
-@st.cache_data
-def preprocess_data(df: pd.DataFrame) -> pd.DataFrame:
-    # Cleans data types and maps coded numerical keys to readable text.
-    df = df.copy()
+@st.cache_data(show_spinner="正在处理数据...")
+def preprocess_data(file) -> pd.DataFrame:
+    df = pd.read_csv(file) if file.name.endswith(".csv") else pd.read_excel(file)
 
-    # Cast IDs and phone numbers to string to preserve leading zeros
+    # 1. Standardize string identifier columns
     string_cols = ["联系电话", "求诊者身份证号", "紧急联系人电话（手机号）"]
     for col in string_cols:
         if col in df.columns:
             df[col] = df[col].astype(str)
 
-    # calculate sum scores for survey
-    phq_cols = df.columns[PHQ_FIELDS[0] : PHQ_FIELDS[1]]
-    gad_cols = df.columns[GAD_FIELDS[0] : GAD_FIELDS[1]]
-    isi_cols = df.columns[ISI_FIELDS[0] : ISI_FIELDS[1]]
+    # 2. Parse submission time
+    if "提交答卷时间" in df.columns:
+        df["提交答卷时间"] = pd.to_datetime(df["提交答卷时间"], errors="coerce")
+
+    # 3. Dynamic Column Identification (Resilient to shifting column index)
+    phq_cols = (
+        df.columns[PHQ_FIELDS[0] : PHQ_FIELDS[1]]
+        if len(df.columns) >= PHQ_FIELDS[1]
+        else []
+    )
+    gad_cols = (
+        df.columns[GAD_FIELDS[0] : GAD_FIELDS[1]]
+        if len(df.columns) >= GAD_FIELDS[1]
+        else []
+    )
+    isi_cols = (
+        df.columns[ISI_FIELDS[0] : ISI_FIELDS[1]]
+        if len(df.columns) >= ISI_FIELDS[1]
+        else []
+    )
     df["PHQ_Total"] = (
         df[phq_cols].apply(pd.to_numeric, errors="coerce").fillna(0).sum(axis=1) - 9
     )
@@ -260,29 +276,6 @@ def preprocess_data(df: pd.DataFrame) -> pd.DataFrame:
     df[gad_cols] = df[gad_cols].replace(FREQUENCY_MAP)
 
     return df
-
-
-# Load dataset
-# @st.cache_data
-def load_data(uploaded_file):
-    # Read the data based on file type
-    if uploaded_file.name.endswith(".csv"):
-        raw_df = pd.read_csv(uploaded_file)
-    else:
-        raw_df = pd.read_excel(uploaded_file)
-    # raw_df = pd.read_excel(file_path)
-    return preprocess_data(raw_df)
-
-
-# Load file
-try:
-    # Create the file chooser widget
-    uploaded_file = st.file_uploader("选择文件上传", type=["csv", "xlsx"])
-    if uploaded_file is not None:
-        df = load_data(uploaded_file)
-except Exception as e:
-    st.error(f"无法读取文件, {e}")
-    st.stop()
 
 
 # ---------------------------------------------------------
@@ -345,6 +338,17 @@ def phone_num_slicer(phone):
     phone_slice = [phone[:3], phone[3:7], phone[7:]]
     return " ".join(phone_slice)
 
+
+# ---------------------------------------------------------
+# Main Execution Flow
+# ---------------------------------------------------------
+uploaded_file = st.sidebar.file_uploader("📂 选择数据文件", type=["csv", "xlsx"])
+
+if not uploaded_file:
+    st.info("👈 请在左侧侧边栏上传门诊预约登记表 (CSV / XLSX)。")
+    st.stop()
+
+df = preprocess_data(uploaded_file)
 
 # ---------------------------------------------------------
 # Filter & Search
