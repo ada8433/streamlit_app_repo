@@ -339,16 +339,18 @@ def plot_scale_breakdown(item_names, scores, max_score=3, title="条目明细分
 
 
 # Previous/Next buttons
-def next_patient():
-    if st.session_state.patient_idx + 1 >= len(name_options):
-        st.session_state.patient_idx = 0
-    else:
-        st.session_state.patient_idx += 1
+def step_patient(step: int):
+    curr_idx = name_options.index(st.session_state.dropdown_val)
+    # Modulo (%) provides circular wrap-around:
+    # - At end (idx + 1 == len), wraps to 0 (first patient)
+    # - At start (0 - 1), wraps to len - 1 (last patient)
+    new_idx = (curr_idx + step) % len(name_options)
+    st.session_state.dropdown_val = name_options[new_idx]
 
 
-def previous_patient():
-    if st.session_state.patient_idx > 0:
-        st.session_state.patient_idx -= 1
+# Update session state when options selected from dropdown menu
+def update_idx_from_dropdown():
+    st.session_state.patient_idx = name_options.index(st.session_state.dropdown_val)
 
 
 # ---------------------------------------------------------
@@ -409,60 +411,49 @@ if filtered_df.empty:
     st.stop()
 
 
-# Main page: search
-# 2. Initialize current patient index in session_state
-name_options = (
-    filtered_df["姓名（实名）"].astype(str)
-    + " ("
-    + filtered_df["提交答卷时间"].astype(str)
-    + ")"
-).tolist()
-if "patient_idx" not in st.session_state:
-    st.session_state.patient_idx = 0
+# ---- Patient Search & Prev/Next buttons----
+# 1. Construct search box options
 
-# Ensure index stays within bounds if the filtered list shrinks
-if st.session_state.patient_idx >= len(name_options):
-    st.session_state.patient_idx = 0
+filtered_df["_label"] = (
+    filtered_df["姓名（实名）"].fillna("未知").astype(str)
+    + " ("
+    + filtered_df["提交答卷时间"].dt.strftime("%Y-%m-%d %H:%M").fillna("-")
+    + ")"
+)
+name_options = filtered_df["_label"].tolist()
+
+# 2. Initialize current patient index in session_state &
+# ensure index stays within bounds if the filtered list shrinks
+if (
+    "dropdown_val" not in st.session_state
+    or st.session_state.dropdown_val not in name_options
+    # or st.session_state.dropdown_val >= len(name_options)
+):
+    st.session_state.dropdown_val = name_options[0]
 
 # 3. Previous / Next Buttons Layout
-col_prev, col_dropdown, col_next = st.columns([1, 5, 1], vertical_alignment="bottom")
+col_prev, col_dropdown, col_next = st.columns([1, 4, 1], vertical_alignment="bottom")
 
 with col_prev:
-    if st.button(
-        "上一位",
-        on_click=previous_patient,
-    ):
-        st.rerun()
+    st.button("◀️ 上一位", on_click=step_patient, args=(-1,))
 
 with col_next:
-    if st.button(
-        "下一位",
-        on_click=next_patient,
-    ):
-        st.rerun()
+    st.button("▶️ 下一位", on_click=step_patient, args=(1,))
 
+# 4. Pull the patient profile when actively selected from dropdown
 with col_dropdown:
-    selected_name = st.selectbox(
+    selected_label = st.selectbox(
         "🔍 选择/输入求诊者姓名（预约提交时间）",
         options=name_options,
-        index=st.session_state.patient_idx,
+        key="dropdown_val",
+        on_change=update_idx_from_dropdown,
     )
-    if selected_name:
-        st.session_state.patient_idx = name_options.index(selected_name)
-        person = filtered_df[
-            filtered_df["姓名（实名）"].astype(str)
-            + " ("
-            + df["提交答卷时间"].astype(str)
-            + ")"
-            == selected_name
-        ].iloc[0]
-# 4. Pull the active person record
-person = filtered_df.iloc[st.session_state.patient_idx]
 
-st.caption(
-    f"当前第 **{st.session_state.patient_idx + 1}** / **{len(name_options)}** 位求诊者"
-)
+# Active record
+patient_idx = name_options.index(selected_label)
+person = filtered_df.iloc[patient_idx]
 
+st.caption(f"当前第 **{patient_idx + 1}** / **{len(name_options)}** 位求诊者")
 
 # ---------------------------------------------------------
 # Main View: Structured Sections
