@@ -459,39 +459,42 @@ st.caption(f"当前第 **{patient_idx + 1}** / **{len(name_options)}** 位求诊
 # Main View: Structured Sections
 # ---------------------------------------------------------
 
-# Key Highlights Banner
+# Patient Demo Banner
 phone_number = phone_num_slicer(person.get("联系电话", "-"))
 st.title(
     f"👤 {person.get('姓名（实名）', '未知')} | \
                 {person.get('年龄', '未填')} 岁| \
                 {person.get('性别', '未填')} |\
-                {phone_number}\
+                📞{phone_number}\
                 :violet-badge[💬 {person.get('请选择您需要预约登记的治疗方式')}]\
                 :blue-badge[{person.get('电话评估治疗师', '-')}]"
 )
 
+# Key Metrics
 main = st.container()
 
+# Diagnosis badges
 diagnoses_list = get_diagnoses(df.columns[30:37], person)
 display = ""
 for d in diagnoses_list:
     display += f":red-badge[{d}] "
 main.write(f"{display}")
 
-col1, col2, col3 = main.columns(3)
+# Scale Metrics
+m1, m2, m3 = main.columns(3)
 
-col1.metric(
+m1.metric(
     label="抑郁筛查量表 (PHQ-9)",
     value=f"{int(person['PHQ_Total'])} / 27",
 )
-col2.metric(
+m2.metric(
     label="广泛性焦虑量表 (GAD-7)",
     value=f"{int(person['GAD_Total'])} / 21",
 )
 
-col3.metric(label="失眠严重程度量表 (ISI)", value=f"{int(person['ISI_TOTAL'])}/28")
+m3.metric(label="失眠严重程度量表 (ISI)", value=f"{int(person['ISI_TOTAL'])}/28")
 
-# Check for safety / risk indicators (Self-harm / Suicide)
+# Risk indicators (Self-harm / Suicide)
 risk_cols = [c for c in df.columns if "25(" in c]
 active_risks = [
     c.replace("25(", "").replace(")", "")
