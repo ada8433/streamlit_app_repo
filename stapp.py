@@ -264,7 +264,7 @@ def preprocess_data(file) -> pd.DataFrame:
             # Normalize 1-4 scale down to 0-3 standard Likert score
             df[f"{prefix}{idx}"] = (numeric_s - 1).clip(lower=0, upper=3).astype(int)
 
-    # Calculate Total Scores
+    # 5. Calculate Total Scores
     phq_score_cols = [f"_phq_score_{i}" for i in range(len(phq_cols))]
     gad_score_cols = [f"_gad_score_{i}" for i in range(len(gad_cols))]
     isi_score_cols = [f"_isi_score_{i}" for i in range(len(isi_cols))]
@@ -273,7 +273,7 @@ def preprocess_data(file) -> pd.DataFrame:
     df["GAD_Total"] = df[gad_score_cols].sum(axis=1) if gad_score_cols else 0
     df["ISI_TOTAL"] = df[isi_score_cols].sum(axis=1) if isi_score_cols else 0
 
-    # Map number key to readable values from dictionary
+    # 6. Map number key to readable values from dictionary
 
     for column, mapping in CHOICE_MAPS.items():
         if column in df.columns:
@@ -286,6 +286,24 @@ def preprocess_data(file) -> pd.DataFrame:
     df[phq_cols] = df[phq_cols].replace(FREQUENCY_MAP)
     df[gad_cols] = df[gad_cols].replace(FREQUENCY_MAP)
 
+    # 7. Calculate Repeat Submissions & First Entry Timestamp
+    # Fall back to phone number if national ID is absent or empty
+    id_col = "求诊者身份证号" if "求诊者身份证号" in df.columns else "联系电话"
+
+    if id_col in df.columns and "提交答卷时间" in df.columns:
+        # Sort chronologically so attempt #1 is always the earliest
+        df = df.sort_values("提交答卷时间", ascending=True).reset_index(drop=True)
+
+        # 1-indexed attempt number
+        df["提交次数"] = df.groupby(id_col).cumcount() + 1
+        # Total number of entries for this patient
+        df["总提交次数"] = df.groupby(id_col)[id_col].transform("count")
+        # Exact date/time of the first entry in database
+        df["首次登记时间"] = df.groupby(id_col)["提交答卷时间"].transform("min")
+    else:
+        df["提交次数"] = 1
+        df["总提交次数"] = 1
+        df["首次登记时间"] = df.get("提交答卷时间")
     return df
 
 
@@ -469,6 +487,24 @@ st.title(
                 :violet-badge[💬 {person.get('请选择您需要预约登记的治疗方式')}]\
                 :blue-badge[{person.get('电话评估治疗师', '-')}]"
 )
+
+# Repeat Submission Alert & First Entry Notice
+
+total_submissions = int(person.get("总提交次数", 1))
+current_submission = int(person.get("提交次数", 1))
+first_entry_time = person.get("首次登记时间")
+
+# Format first entry date cleanly
+if pd.notna(first_entry_time):
+    first_entry_str = pd.to_datetime(first_entry_time).strftime("%Y-%m-%d %H:%M")
+else:
+    first_entry_str = "未知"
+
+if total_submissions > 1:
+    st.info(
+        f"📋 **多次登记提示**：该求诊者在数据库中共有 **{total_submissions}** 次提交记录（当前查看的是第 **{current_submission}** 次）。\n\n"
+        f"**初次建档/登记时间**：`{first_entry_str}`"
+    )
 
 # Key Metrics
 main = st.container()
