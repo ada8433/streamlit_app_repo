@@ -298,8 +298,11 @@ def preprocess_data(file) -> pd.DataFrame:
         df["提交次数"] = df.groupby(id_col).cumcount() + 1
         # Total number of entries for this patient
         df["总提交次数"] = df.groupby(id_col)[id_col].transform("count")
-        # Exact date/time of the first entry in database
+        # Exact date/time of the first/last entry in database
         df["首次登记时间"] = df.groupby(id_col)["提交答卷时间"].transform("min")
+        df["最新登记时间"] = df.groupby(id_col)["提交答卷时间"].transform("max")
+        # Check latest progress
+        df["当前治疗进展"] = df.groupby(id_col)["备注"].transform("max")
     else:
         df["提交次数"] = 1
         df["总提交次数"] = 1
@@ -493,6 +496,8 @@ st.title(
 total_submissions = int(person.get("总提交次数", 1))
 current_submission = int(person.get("提交次数", 1))
 first_entry_time = person.get("首次登记时间")
+last_entry_time = person.get("最新登记时间")
+current_progress = person.get("当前治疗进展")
 
 # Format first entry date cleanly
 if pd.notna(first_entry_time):
@@ -503,9 +508,11 @@ else:
 if total_submissions > 1:
     st.info(
         f"📋 **多次登记提示**：该求诊者在数据库中共有 **{total_submissions}** 次提交记录（当前查看的是第 **{current_submission}** 次）。\n\n"
-        f"**初次建档/登记时间**：`{first_entry_str}`"
+        f"**初次登记时间**：`{first_entry_str}`\n\n"
+        f"**当前治疗进展**：`{current_progress}` （`{last_entry_time}`）"
     )
-
+else:
+    st.info(f"**当前治疗进展**：`{current_progress}` （`{last_entry_time}`）")
 # Key Metrics
 main = st.container()
 
