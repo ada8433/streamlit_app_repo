@@ -497,7 +497,7 @@ total_submissions = int(person.get("总提交次数", 1))
 current_submission = int(person.get("提交次数", 1))
 first_entry_time = person.get("首次登记时间")
 last_entry_time = person.get("最新登记时间")
-current_progress = person.get("当前治疗进展")
+current_progress = person.get("当前治疗进展", "-")
 
 # Format first entry date cleanly
 if pd.notna(first_entry_time):
@@ -513,6 +513,7 @@ if total_submissions > 1:
     )
 else:
     st.info(f"**当前治疗进展**：`{current_progress}` （`{last_entry_time}`）")
+
 # Key Metrics
 main = st.container()
 
