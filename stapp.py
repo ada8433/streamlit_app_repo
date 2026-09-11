@@ -230,12 +230,14 @@ if st.session_state.pop("_save_success", False):
 
 # ---- Download updated file ----
 if "raw_df" in st.session_state:
-    _buf = io.BytesIO()
-    st.session_state["raw_df"].to_excel(_buf, index=False, engine="openpyxl")
-    _buf.seek(0)
+    def get_excel_bytes() -> bytes:
+        buf = io.BytesIO()
+        st.session_state["raw_df"].to_excel(buf, index=False, engine="openpyxl")
+        return buf.getvalue()
+
     st.sidebar.download_button(
         label="📥 下载更新后的文件",
-        data=_buf,
+        data=get_excel_bytes,
         file_name=f"updated_{st.session_state.get('_file_name', 'data.xlsx')}",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
@@ -252,7 +254,7 @@ st.title(
                 {person.get('性别', '未填')} |\
                 📞{phone_number}\
                 :violet-badge[💬 {person.get('请选择您需要预约登记的治疗方式')}]\
-                :blue-badge[{person.get('电话评估治疗师', '-')}]"
+                :blue-badge[{person.get('首访治疗师', '-')}]"
 )
 
 # Repeat Submission Alert & First Entry Notice
@@ -295,21 +297,31 @@ main.write(f"{display}")
 m1, m2, m3 = main.columns(3)
 
 phq_severity = person.get("PHQ_Severity", "")
-phq_label = f"抑郁筛查量表 (PHQ-9) · {phq_severity}" if phq_severity else "抑郁筛查量表 (PHQ-9)"
+phq_label = (
+    f"抑郁筛查量表 (PHQ-9) · {phq_severity}" if phq_severity else "抑郁筛查量表 (PHQ-9)"
+)
 m1.metric(
     label=phq_label,
     value=f"{int(person['PHQ_Total'])} / 27",
 )
 
 gad_severity = person.get("GAD_Severity", "")
-gad_label = f"广泛性焦虑量表 (GAD-7) · {gad_severity}" if gad_severity else "广泛性焦虑量表 (GAD-7)"
+gad_label = (
+    f"广泛性焦虑量表 (GAD-7) · {gad_severity}"
+    if gad_severity
+    else "广泛性焦虑量表 (GAD-7)"
+)
 m2.metric(
     label=gad_label,
     value=f"{int(person['GAD_Total'])} / 21",
 )
 
 isi_severity = person.get("ISI_Severity", "")
-isi_label = f"失眠严重程度量表 (ISI) · {isi_severity}" if isi_severity else "失眠严重程度量表 (ISI)"
+isi_label = (
+    f"失眠严重程度量表 (ISI) · {isi_severity}"
+    if isi_severity
+    else "失眠严重程度量表 (ISI)"
+)
 m3.metric(label=isi_label, value=f"{int(person['ISI_TOTAL'])} / 28")
 
 # Risk indicators (Self-harm / Suicide)
@@ -489,7 +501,9 @@ with tab5:
     if not selected_goals:
         goal_cols = [c for c in df.columns if "目标(" in c]
         selected_goals = [
-            c.replace("目标(", "").replace(")", "") for c in goal_cols if person.get(c) == 1
+            c.replace("目标(", "").replace(")", "")
+            for c in goal_cols
+            if person.get(c) == 1
         ]
 
     st.write(
@@ -499,5 +513,5 @@ with tab5:
         f"**预约登记的治疗方式**：{person.get('请选择您需要预约登记的治疗方式', '-')}"
     )
     st.write(f"**过去心理咨询经历**：{person.get('过去心理咨询', '-')}")
-    st.write(f"**电话评估治疗师**：:blue-badge[{person.get('电话评估治疗师', '-')}]")
+    st.write(f"**电话评估治疗师**：:blue-badge[{person.get('首访治疗师', '-')}]")
     st.info(f"**其他备注信息**：{person.get('其他需要备注说明的信息：', '无')}")
