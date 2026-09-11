@@ -1,396 +1,35 @@
-import datetime
 import io
-import altair as alt
-import numpy as np
 import pandas as pd
 import streamlit as st
+
+from mappings import (
+    CONTACT_OUTCOMES,
+    DIAGNOSIS_FIELDS,
+    GAD_FIELDS,
+    GAD_LABELS,
+    PHQ_FIELDS,
+    PHQ_LABELS,
+    TEXT_TO_SCORE,
+    TREATMENT_OPTIONS,
+)
+from preprocessing import load_raw_data, preprocess_data
+from utils import (
+    get_diagnoses,
+    parse_date,
+    parse_multi,
+    phone_num_slicer,
+    plot_scale_breakdown,
+    safe_index,
+    safe_str,
+)
 
 # Page setup
 st.set_page_config(page_title="门诊预约Dashboard", page_icon="📋", layout="wide")
 
-# ---------------------------------------------------------
-# Dictionary
-# ---------------------------------------------------------
-# MCQs
-CHOICE_MAPS = {
-    "填写者": {"1": "求诊者本人", "2": "其他（请说明您与求诊人的关系）"},
-    "性别": {"1": "男", "2": "女"},
-    "您的常住地为": {"1": "上海", "2": "其他"},
-    "教育水平": {
-        "1": "高中及以下",
-        "2": "中专/大专",
-        "3": "本科",
-        "4": "硕士",
-        "5": "博士及以上",
-    },
-    "职业": {
-        "1": "政府/事业单位工作人员",
-        "2": "公司普通职员",
-        "3": "企事业、政府高级管理人员",
-        "4": "工人",
-        "5": "医护人员",
-        "6": "其他专业人士（如教师/律师/记者等）",
-        "7": "警察/军人",
-        "8": "农林牧渔劳动者",
-        "9": "个体/自由职业",
-        "10": "学生",
-        "11": "退休",
-        "12": "无业",
-    },
-    "年级": {
-        "1": "小学",
-        "2": "初中",
-        "3": "高中",
-        "4": "大学",
-        "5": "硕士",
-        "6": "博士",
-    },
-    "婚姻状态": {"1": "单身", "2": "未婚", "3": "已婚", "4": "离婚", "5": "丧偶"},
-    "主要同居者": {
-        "1": "独居",
-        "2": "母父",
-        "3": "子女",
-        "4": "伴侣/配偶",
-        "5": "兄弟姐妹",
-        "6": "外祖母父",
-        "7": "其他",
-    },
-    "诊断": {
-        "1": "抑郁",
-        "2": "焦虑",
-        "3": "失眠",
-        "4": "强迫",
-        "5": "双相",
-        "6": "精神分裂症",
-        "7": "其他",
-    },
-    "未服药情况": {
-        "1": "医生未建议",
-        "2": "服药顾虑未服药",
-        "3": "已自行停药",
-        "4": "遵医嘱停药",
-    },
-    "是否有以下想法或行为": {
-        "1": "无",
-        "2": "自伤意念",
-        "3": "自伤行为",
-        "4": "自杀意念",
-        "5": "自杀想法",
-    },
-    "您有多少关系密切，可以得到支持和帮助的朋友？（只选一项）": {
-        "1": "0",
-        "2": "1-2个",
-        "3": "3-5个",
-        "4": "6个或6个以上",
-    },
-    "近一年来居住情况": {
-        "1": "远离家人，且独居一室",
-        "2": "住处经常变动，多数时间和陌生人住在一起",
-        "3": "和同学、同事或朋友住在一起",
-        "4": "和家人住在一起",
-    },
-    "您遇到烦恼时会主动倾诉吗：（只选一项）": {
-        "1": "从不向任何人倾诉",
-        "2": "被询问会倾诉",
-        "3": "会主动倾诉",
-    },
-    "下列来源中哪一项是您遇到烦恼时最主要倾诉对象？（只选一项）": {
-        "1": "性缘伴侣",
-        "2": "家人",
-        "3": "朋友",
-        "4": "同事",
-        "5": "领导",
-        "6": "党团工会等",
-        "7": "宗教、社会团体等",
-        "8": "其它",
-    },
-    "请选择您需要预约登记的治疗方式": {"1": "团体", "2": "个体", "3": "家庭"},
-    "首次来我院就诊年份": {
-        "1": "2021",
-        "2": "2020",
-        "3": "2019",
-        "4": "2018",
-        "5": "2017",
-        "6": "2016",
-        "7": "2015",
-        "8": "2014",
-        "9": "2013",
-        "10": "2012",
-        "11": "2011",
-        "12": "2010",
-        "13": "2009",
-        "14": "2008",
-        "15": "2007",
-        "16": "2006",
-        "17": "2005",
-        "18": "2004",
-        "19": "2003",
-        "20": "2002",
-        "21": "2001",
-        "22": "2000",
-        "23": "1999",
-        "24": "1998",
-        "25": "1997",
-        "26": "1996",
-        "27": "1995",
-        "28": "1994",
-        "29": "1993",
-        "30": "1992",
-        "31": "1991",
-        "32": "1990",
-        "33": "1990以前",
-        "34": "2022",
-        "35": "2023",
-        "36": "2024",
-        "37": "2025",
-        "38": "2026",
-    },
-}
-
-# YES_OR_NO
-YES_NO_MAP = {1: "是", 2: "否"}
-
-YES_NO_FIELDS = [
-    "目前是否已经休学/休假或离职",
-    "生育状态",
-    "半年内是否经历重大生活事件",
-    "是否饲养宠物",
-    "是否曾在本院心理咨询门诊就诊",
-    "目前是否在服用精神科药物",
-    "是否有精神/心理疾病家族史",
-    "是否有躯体疾病",
-    "过去心理咨询",
-]
-
-# Sidebar edit form options
-CONTACT_OUTCOMES = ["", "本人接听", "家人接听", "无人接听", "语音留言", "号码有误/空号"]
-TREATMENT_OPTIONS = [
-    "个体",
-    "个体（周末）",
-    "家庭",
-    "家庭（周末）",
-    "团体",
-    "团体（周末）",
-    "特诊",
-    "心六百",
-]
-EDITABLE_COLS = [
-    "首访治疗师",
-    "首访时间",
-    "首访情况",
-    "治疗推荐",
-    "未推荐说明",
-    "回访治疗师",
-    "回访时间",
-    "回访情况",
-    "回访治疗安排",
-]
-
-# LIKERT_STYLE
-FREQUENCY_MAP = {1: "没有", 2: "有几天", 3: "一半以上时间", 4: "几乎每天"}
-
-SEVERITY_MAP = {1: "无", 2: "轻度", 3: "中度", 4: "重度", 5: "极重度"}
-
-SATISFACTION_MAP = {
-    1: "非常满意",
-    2: "满意",
-    3: "不太满意",
-    4: "不满意",
-    5: "非常不满意",
-}
-
-TEXT_TO_SCORE = {
-    "没有": 0,
-    "完全不会": 0,
-    "0": 0,
-    0: 0,
-    "有几天": 1,
-    "好几天": 1,
-    "1": 1,
-    1: 1,
-    "一半以上时间": 2,
-    "一半以上的时间": 2,
-    "2": 2,
-    2: 2,
-    "几乎每天": 3,
-    "3": 3,
-    3: 3,
-}
-# PHQ-9 Items
-phq_labels = [
-    "1. 兴趣减退",
-    "2. 心情低落",
-    "3. 睡眠困扰",
-    "4. 疲劳乏力",
-    "5. 食欲改变",
-    "6. 自责内疚",
-    "7. 专注困难",
-    "8. 动作迟缓/烦躁",
-    "9. 自伤意念",
-]
-# GAD-7 Items
-gad_labels = [
-    "1. 紧张急切",
-    "2. 无法控制担忧",
-    "3. 担忧过多",
-    "4. 难以放松",
-    "5. 不安坐立难安",
-    "6. 易怒急躁",
-    "7. 恐惧感",
-]
-PHQ_FIELDS = [49, 58]
-GAD_FIELDS = [58, 65]
-ISI_FIELDS = [65, 72]
-
 
 # ---------------------------------------------------------
-# Preprocess and load adta
+# Navigation Callbacks
 # ---------------------------------------------------------
-# Preprocess function
-@st.cache_data(show_spinner="正在处理数据...")
-def preprocess_data(raw_df: pd.DataFrame) -> pd.DataFrame:
-    df = raw_df.copy()
-
-    # 1. Standardize string identifier columns
-    string_cols = ["联系电话", "求诊者身份证号"]
-    for col in string_cols:
-        if col in df.columns:
-            df[col] = df[col].astype(str).str.replace(r"\D+", "", regex=True)
-
-    # 2. Parse submission time
-    if "提交答卷时间" in df.columns:
-        df["提交答卷时间"] = pd.to_datetime(df["提交答卷时间"], errors="coerce")
-
-    # 3. Dynamic Column Identification (Resilient to shifting column index)
-    phq_cols = (
-        df.columns[PHQ_FIELDS[0] : PHQ_FIELDS[1]]
-        if len(df.columns) >= PHQ_FIELDS[1]
-        else []
-    )
-    gad_cols = (
-        df.columns[GAD_FIELDS[0] : GAD_FIELDS[1]]
-        if len(df.columns) >= GAD_FIELDS[1]
-        else []
-    )
-    isi_cols = (
-        df.columns[ISI_FIELDS[0] : ISI_FIELDS[1]]
-        if len(df.columns) >= ISI_FIELDS[1]
-        else []
-    )
-
-    # 4. Standardize Survey Scales (Assumes input 1-4 mapped to 0-3)
-    for prefix, cols in [
-        ("_phq_score_", phq_cols),
-        ("_gad_score_", gad_cols),
-        ("_isi_score_", isi_cols),
-    ]:
-        for idx, col in enumerate(cols):
-            numeric_s = pd.to_numeric(df[col], errors="coerce").fillna(1)
-            # Normalize 1-4 scale down to 0-3 standard Likert score
-            df[f"{prefix}{idx}"] = (numeric_s - 1).clip(lower=0, upper=3).astype(int)
-
-    # 5. Calculate Total Scores
-    phq_score_cols = [f"_phq_score_{i}" for i in range(len(phq_cols))]
-    gad_score_cols = [f"_gad_score_{i}" for i in range(len(gad_cols))]
-    isi_score_cols = [f"_isi_score_{i}" for i in range(len(isi_cols))]
-
-    df["PHQ_Total"] = df[phq_score_cols].sum(axis=1) if phq_score_cols else 0
-    df["GAD_Total"] = df[gad_score_cols].sum(axis=1) if gad_score_cols else 0
-    df["ISI_TOTAL"] = df[isi_score_cols].sum(axis=1) if isi_score_cols else 0
-
-    # 6. Map number key to readable values from dictionary
-
-    for column, mapping in CHOICE_MAPS.items():
-        if column in df.columns:
-            df[column] = df[column].astype(str).map(mapping)
-
-    for column in YES_NO_FIELDS:
-        if column in df.columns:
-            df[column] = df[column].astype(float).map(YES_NO_MAP)
-
-    df[phq_cols] = df[phq_cols].replace(FREQUENCY_MAP)
-    df[gad_cols] = df[gad_cols].replace(FREQUENCY_MAP)
-
-    # 7. Calculate Repeat Submissions & First Entry Timestamp
-    # Fall back to phone number if national ID is absent or empty
-    id_col = "求诊者身份证号" if "求诊者身份证号" in df.columns else "联系电话"
-
-    if id_col in df.columns and "提交答卷时间" in df.columns:
-        # Sort chronologically so attempt #1 is always the earliest
-        # Preserve original index for edit-save mapping
-        df["_original_idx"] = df.index
-        df = df.sort_values("提交答卷时间", ascending=True).reset_index(drop=True)
-
-        # 1-indexed attempt number
-        df["提交次数"] = df.groupby(id_col).cumcount() + 1
-        # Total number of entries for this patient
-        df["总提交次数"] = df.groupby(id_col)[id_col].transform("count")
-        # Exact date/time of the first/last entry in database
-        df["首次登记时间"] = df.groupby(id_col)["提交答卷时间"].transform("min")
-        df["最新登记时间"] = df.groupby(id_col)["提交答卷时间"].transform("max")
-        # Check latest progress (support new and legacy column name)
-        _progress_col = (
-            "回访治疗安排" if "回访治疗安排" in df.columns else "备注（回访治疗安排）"
-        )
-        if _progress_col in df.columns:
-            df["当前治疗进展"] = df.groupby(id_col)[_progress_col].transform("max")
-    else:
-        df["提交次数"] = 1
-        df["总提交次数"] = 1
-        df["首次登记时间"] = df.get("提交答卷时间")
-    return df
-
-
-# ---------------------------------------------------------
-# Helper Functions
-# ---------------------------------------------------------
-# slice phone numbers into easy-to-read format
-def phone_num_slicer(phone):
-    phone = str(phone).strip()
-    phone_slice = [phone[:3], phone[3:7], phone[7:]]
-    return " ".join(phone_slice)
-
-
-# get diagnoses
-def get_diagnoses(diagnosis_columns, person):
-    prev_diagnoses = []
-    for label in diagnosis_columns:
-        if person.get(label) == 1:
-            prev_diagnoses.append(label.split("(")[1].split(")")[0].strip())
-    return prev_diagnoses
-
-
-# plot PHQ and GAD charts
-def plot_scale_breakdown(item_names, scores, max_score=3, title="条目明细分布"):
-    # 1. Build a clean plotting DataFrame
-    chart_data = pd.DataFrame({"条目": item_names, "得分": scores})
-
-    # 2. Build horizontal bar chart using Altair
-    chart = (
-        alt.Chart(chart_data)
-        .mark_bar(cornerRadiusEnd=4)
-        .encode(
-            x=alt.X(
-                "得分:Q", scale=alt.Scale(domain=[0, max_score]), title="得分 (0-3)"
-            ),
-            y=alt.Y("条目:N", sort=None),
-            color=alt.Color(
-                "得分:Q",
-                scale=alt.Scale(scheme="redyellowgreen", reverse=True),
-                legend=None,
-            ),
-            tooltip=["条目", "得分"],
-        )
-        .properties(title=title, height=320)
-    )
-
-    # 3. Add score numbers on top of bars
-    text = chart.mark_text(align="left", baseline="middle", dx=3).encode(text="得分:Q")
-
-    return st.altair_chart(chart + text, width="stretch")
-
-
-# Previous/Next buttons
 def step_patient(step: int):
     curr_idx = name_options.index(st.session_state.dropdown_val)
     # Modulo (%) provides circular wrap-around:
@@ -400,7 +39,6 @@ def step_patient(step: int):
     st.session_state.dropdown_val = name_options[new_idx]
 
 
-# Update session state when options selected from dropdown menu
 def update_idx_from_dropdown():
     st.session_state.patient_idx = name_options.index(st.session_state.dropdown_val)
 
@@ -419,19 +57,7 @@ if (
     "raw_df" not in st.session_state
     or st.session_state.get("_file_name") != uploaded_file.name
 ):
-    uploaded_file.seek(0)
-    _raw = (
-        pd.read_csv(uploaded_file)
-        if uploaded_file.name.endswith(".csv")
-        else pd.read_excel(uploaded_file)
-    )
-    # Ensure editable columns exist (new files may not have them yet)
-    for col in EDITABLE_COLS:
-        if col not in _raw.columns:
-            _raw[col] = ""
-    # Force string dtype so saving strings to empty (float64) columns won't fail
-    _raw[EDITABLE_COLS] = _raw[EDITABLE_COLS].fillna("").astype(str)
-    st.session_state["raw_df"] = _raw
+    st.session_state["raw_df"] = load_raw_data(uploaded_file)
     st.session_state["_file_name"] = uploaded_file.name
 
 df = preprocess_data(st.session_state["raw_df"])
@@ -485,7 +111,6 @@ if filtered_df.empty:
 
 # ---- Patient Search & Prev/Next buttons----
 # 1. Construct search box options
-
 filtered_df["_label"] = (
     filtered_df["姓名（实名）"].fillna("未知").astype(str)
     + " ("
@@ -499,7 +124,6 @@ name_options = filtered_df["_label"].tolist()
 if (
     "dropdown_val" not in st.session_state
     or st.session_state.dropdown_val not in name_options
-    # or st.session_state.dropdown_val >= len(name_options)
 ):
     st.session_state.dropdown_val = name_options[0]
 
@@ -530,45 +154,6 @@ st.caption(f"当前第 **{patient_idx + 1}** / **{len(name_options)}** 位求诊
 # ---------------------------------------------------------
 # Sidebar: Edit Form (placed after patient selection so we have `person`)
 # ---------------------------------------------------------
-
-
-def _safe_str(val, default=""):
-    """Return clean string, treating NaN / None / 'nan' as *default*."""
-    if val is None or (isinstance(val, float) and pd.isna(val)):
-        return default
-    s = str(val).strip()
-    return default if s in ("nan", "NaT", "") else s
-
-
-def _parse_date(val):
-    """Return a date object or None."""
-    if val is None or (isinstance(val, float) and pd.isna(val)):
-        return None
-    s = str(val).strip()
-    if s in ("", "nan", "NaT", "None"):
-        return None
-    try:
-        return pd.to_datetime(s).date()
-    except Exception:
-        return None
-
-
-def _parse_multi(val, options):
-    """Parse a comma-separated string into a list of valid options."""
-    if val is None or (isinstance(val, float) and pd.isna(val)):
-        return []
-    return [v.strip() for v in str(val).split(",") if v.strip() in options]
-
-
-def _safe_index(options, val, default=0):
-    """Return the index of *val* in *options*, or *default*."""
-    s = _safe_str(val)
-    try:
-        return options.index(s)
-    except ValueError:
-        return default
-
-
 st.sidebar.markdown("---")
 st.sidebar.markdown("#### ✏️ 首访 / 回访信息登记")
 
@@ -576,23 +161,23 @@ with st.sidebar.form("edit_patient_form"):
     # ---- 首访 (first contact) ----
     st.markdown("**📞 首访**")
     new_first_therapist = st.text_input(
-        "首访治疗师", value=_safe_str(person.get("首访治疗师"))
+        "首访治疗师", value=safe_str(person.get("首访治疗师"))
     )
     new_first_date = st.date_input(
-        "首访时间", value=_parse_date(person.get("首访时间"))
+        "首访时间", value=parse_date(person.get("首访时间"))
     )
     new_first_outcome = st.selectbox(
         "首访情况",
         options=CONTACT_OUTCOMES,
-        index=_safe_index(CONTACT_OUTCOMES, person.get("首访情况")),
+        index=safe_index(CONTACT_OUTCOMES, person.get("首访情况")),
     )
     new_treatment_rec = st.multiselect(
         "治疗推荐",
         options=TREATMENT_OPTIONS,
-        default=_parse_multi(person.get("治疗推荐"), TREATMENT_OPTIONS),
+        default=parse_multi(person.get("治疗推荐"), TREATMENT_OPTIONS),
     )
     new_no_rec_reason = st.text_input(
-        "未推荐说明", value=_safe_str(person.get("未推荐说明"))
+        "未推荐说明", value=safe_str(person.get("未推荐说明"))
     )
 
     st.markdown("---")
@@ -600,18 +185,18 @@ with st.sidebar.form("edit_patient_form"):
     # ---- 回访 (follow-up) ----
     st.markdown("**🔄 回访**")
     new_followup_therapist = st.text_input(
-        "回访治疗师", value=_safe_str(person.get("回访治疗师"))
+        "回访治疗师", value=safe_str(person.get("回访治疗师"))
     )
     new_followup_date = st.date_input(
-        "回访时间", value=_parse_date(person.get("回访时间"))
+        "回访时间", value=parse_date(person.get("回访时间"))
     )
     new_followup_outcome = st.selectbox(
         "回访情况",
         options=CONTACT_OUTCOMES,
-        index=_safe_index(CONTACT_OUTCOMES, person.get("回访情况")),
+        index=safe_index(CONTACT_OUTCOMES, person.get("回访情况")),
     )
     new_followup_notes = st.text_input(
-        "回访治疗安排", value=_safe_str(person.get("回访治疗安排"))
+        "回访治疗安排", value=safe_str(person.get("回访治疗安排"))
     )
 
     submitted = st.form_submit_button("💾 保存修改", use_container_width=True)
@@ -673,7 +258,6 @@ st.title(
 )
 
 # Repeat Submission Alert & First Entry Notice
-
 total_submissions = int(person.get("总提交次数", 1))
 current_submission = int(person.get("提交次数", 1))
 first_entry_time = person.get("首次登记时间")
@@ -699,7 +283,8 @@ else:
 main = st.container()
 
 # Diagnosis badges
-diagnoses_list = get_diagnoses(df.columns[30:37], person)
+diagnosis_cols = df.columns[DIAGNOSIS_FIELDS[0] : DIAGNOSIS_FIELDS[1]]
+diagnoses_list = get_diagnoses(diagnosis_cols, person)
 display = ""
 for d in diagnoses_list:
     display += f":red-badge[{d}] "
@@ -819,7 +404,7 @@ with tab3:
     c1, c2 = st.columns(2, gap="medium", border=True)
     with c1:
         plot_scale_breakdown(
-            phq_labels, phq_scores, max_score=3, title="PHQ-9 抑郁症状条目得分"
+            PHQ_LABELS, phq_scores, max_score=3, title="PHQ-9 抑郁症状条目得分"
         )
         st.write(f"#### PHQ总分：{person.get('PHQ_Total', '-')}")
         st.markdown("#### PHQ-9 项目摘要")
@@ -828,7 +413,7 @@ with tab3:
 
     with c2:
         plot_scale_breakdown(
-            gad_labels, gad_scores, max_score=3, title="GAD-7 焦虑症状条目得分"
+            GAD_LABELS, gad_scores, max_score=3, title="GAD-7 焦虑症状条目得分"
         )
         st.write(f"#### GAD总分：{person.get('GAD_Total', '-')}")
         st.markdown("#### GAD-7 项目摘要")
