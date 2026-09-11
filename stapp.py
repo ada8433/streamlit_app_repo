@@ -163,9 +163,7 @@ with st.sidebar.form("edit_patient_form"):
     new_first_therapist = st.text_input(
         "首访治疗师", value=safe_str(person.get("首访治疗师"))
     )
-    new_first_date = st.date_input(
-        "首访时间", value=parse_date(person.get("首访时间"))
-    )
+    new_first_date = st.date_input("首访时间", value=parse_date(person.get("首访时间")))
     new_first_outcome = st.selectbox(
         "首访情况",
         options=CONTACT_OUTCOMES,
@@ -283,8 +281,11 @@ else:
 main = st.container()
 
 # Diagnosis badges
-diagnosis_cols = df.columns[DIAGNOSIS_FIELDS[0] : DIAGNOSIS_FIELDS[1]]
-diagnoses_list = get_diagnoses(diagnosis_cols, person)
+diagnoses_list = person.get("diagnoses_list", [])
+if not diagnoses_list:
+    diagnosis_cols = df.columns[DIAGNOSIS_FIELDS[0] : DIAGNOSIS_FIELDS[1]]
+    diagnoses_list = get_diagnoses(diagnosis_cols, person)
+
 display = ""
 for d in diagnoses_list:
     display += f":red-badge[{d}] "
@@ -293,26 +294,35 @@ main.write(f"{display}")
 # Scale Metrics
 m1, m2, m3 = main.columns(3)
 
+phq_severity = person.get("PHQ_Severity", "")
+phq_label = f"抑郁筛查量表 (PHQ-9) · {phq_severity}" if phq_severity else "抑郁筛查量表 (PHQ-9)"
 m1.metric(
-    label="抑郁筛查量表 (PHQ-9)",
+    label=phq_label,
     value=f"{int(person['PHQ_Total'])} / 27",
 )
+
+gad_severity = person.get("GAD_Severity", "")
+gad_label = f"广泛性焦虑量表 (GAD-7) · {gad_severity}" if gad_severity else "广泛性焦虑量表 (GAD-7)"
 m2.metric(
-    label="广泛性焦虑量表 (GAD-7)",
+    label=gad_label,
     value=f"{int(person['GAD_Total'])} / 21",
 )
 
-m3.metric(label="失眠严重程度量表 (ISI)", value=f"{int(person['ISI_TOTAL'])}/28")
+isi_severity = person.get("ISI_Severity", "")
+isi_label = f"失眠严重程度量表 (ISI) · {isi_severity}" if isi_severity else "失眠严重程度量表 (ISI)"
+m3.metric(label=isi_label, value=f"{int(person['ISI_TOTAL'])} / 28")
 
 # Risk indicators (Self-harm / Suicide)
-risk_cols = [c for c in df.columns if "25(" in c]
-active_risks = [
-    c.replace("25(", "").replace(")", "")
-    for c in risk_cols
-    if person.get(c) == 1 or person.get(c) == "是"
-]
+active_risks = person.get("crisis_risk_flags", [])
+if not active_risks:
+    risk_cols = [c for c in df.columns if "25(" in c]
+    active_risks = [
+        c.replace("25(", "").replace(")", "")
+        for c in risk_cols
+        if person.get(c) == 1 or person.get(c) == "是"
+    ]
 
-if any(r in ["自伤意念", "自伤行为", "自杀意念", "自杀想法"] for r in active_risks):
+if active_risks:
     main.error(f"⚠️ 风险预警指标: {', '.join(active_risks)}")
 
 # Organize 112 columns into Tabs
@@ -386,6 +396,14 @@ with tab2:
             for c in symptoms_cols
             if person.get(c) == 1 or person.get(c) == "是"
         ]
+        present_symptoms = person.get("diagnoses_list")
+        if not present_symptoms:
+            symptoms_cols = [c for c in df.columns if "19(" in c]
+            present_symptoms = [
+                c.replace("19(", "").replace(")", "")
+                for c in symptoms_cols
+                if person.get(c) == 1 or person.get(c) == "是"
+            ]
         st.write(
             f"**当前主诉/症状**：{', '.join(present_symptoms) if present_symptoms else '无特异记录'}"
         )
@@ -396,10 +414,24 @@ with tab2:
 with tab3:
     phq_cols = df.columns[PHQ_FIELDS[0] : PHQ_FIELDS[1]]
     gad_cols = df.columns[GAD_FIELDS[0] : GAD_FIELDS[1]]
+    phq_cols = (
+        df.columns[PHQ_FIELDS[0] : PHQ_FIELDS[1]]
+        if len(df.columns) >= PHQ_FIELDS[1]
+        else []
+    )
+    gad_cols = (
+        df.columns[GAD_FIELDS[0] : GAD_FIELDS[1]]
+        if len(df.columns) >= GAD_FIELDS[1]
+        else []
+    )
 
     # Raw option text mapping back to scores (0..3)
     phq_scores = [TEXT_TO_SCORE.get(person[c], 0) for c in phq_cols]
     gad_scores = [TEXT_TO_SCORE.get(person[c], 0) for c in gad_cols]
+    # Use pre-computed item scores from pipeline (0..3)
+    phq_scores = [int(person.get(f"_phq_score_{i}", 0)) for i in range(len(PHQ_LABELS))]
+    gad_scores = [int(person.get(f"_gad_score_{i}", 0)) for i in range(len(GAD_LABELS))]
+
     st.markdown("### 📝 抑郁与焦虑自评（PHQ-9 & GAD-7）")
     c1, c2 = st.columns(2, gap="medium", border=True)
     with c1:
@@ -407,6 +439,9 @@ with tab3:
             PHQ_LABELS, phq_scores, max_score=3, title="PHQ-9 抑郁症状条目得分"
         )
         st.write(f"#### PHQ总分：{person.get('PHQ_Total', '-')}")
+        phq_sev = person.get("PHQ_Severity", "")
+        phq_sev_str = f" ({phq_sev})" if phq_sev else ""
+        st.write(f"#### PHQ总分：{person.get('PHQ_Total', '-')}{phq_sev_str}")
         st.markdown("#### PHQ-9 项目摘要")
         for c in phq_cols[:9]:
             st.write(f"• **{c.split('—')[-1]}**: {person.get(c, '-')}")
@@ -416,6 +451,9 @@ with tab3:
             GAD_LABELS, gad_scores, max_score=3, title="GAD-7 焦虑症状条目得分"
         )
         st.write(f"#### GAD总分：{person.get('GAD_Total', '-')}")
+        gad_sev = person.get("GAD_Severity", "")
+        gad_sev_str = f" ({gad_sev})" if gad_sev else ""
+        st.write(f"#### GAD总分：{person.get('GAD_Total', '-')}{gad_sev_str}")
         st.markdown("#### GAD-7 项目摘要")
         for c in gad_cols[:7]:
             st.write(f"• **{c.split('—')[-1]}**: {person.get(c, '-')}")
@@ -431,6 +469,12 @@ with tab4:
     st.write(
         f"**倾诉意愿**：{person.get('您遇到烦恼时会主动倾诉吗：（只选一项）', '-')} | **主要倾诉对象：** {person.get('下列来源中哪一项是您遇到烦恼时最主要倾诉对象？（只选一项）', '-')}"
     )
+    obj_support = person.get("objective_support_list", [])
+    subj_support = person.get("subjective_support_list", [])
+    if obj_support:
+        st.write(f"**急难经济/实际支持来源**：{'、'.join(obj_support)}")
+    if subj_support:
+        st.write(f"**急难安慰/关心支持来源**：{'、'.join(subj_support)}")
 
 # ---------------------------------------------------------
 # TAB 5: Treatment Goals & Preferences
@@ -441,6 +485,12 @@ with tab5:
     selected_goals = [
         c.replace("目标(", "").replace(")", "") for c in goal_cols if person.get(c) == 1
     ]
+    selected_goals = person.get("treatment_goals_list")
+    if not selected_goals:
+        goal_cols = [c for c in df.columns if "目标(" in c]
+        selected_goals = [
+            c.replace("目标(", "").replace(")", "") for c in goal_cols if person.get(c) == 1
+        ]
 
     st.write(
         f"**心理治疗目标**：{' | '.join(selected_goals) if selected_goals else '未明确选定'}"

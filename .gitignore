@@ -1,3 +1,8 @@
 .DS_Store
 columnKeys.xlsx
 ~$columnKeys.xlsx
+Survey_raw.aspx
+mock.xlsx
+__pycache__/
+*.pyc
+
