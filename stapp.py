@@ -230,9 +230,11 @@ if st.session_state.pop("_save_success", False):
 
 # ---- Download updated file ----
 if "raw_df" in st.session_state:
-    def get_excel_bytes() -> bytes:
+    _export_df = st.session_state["raw_df"]
+
+    def get_excel_bytes(df: pd.DataFrame = _export_df) -> bytes:
         buf = io.BytesIO()
-        st.session_state["raw_df"].to_excel(buf, index=False, engine="openpyxl")
+        df.to_excel(buf, index=False, engine="openpyxl")
         return buf.getvalue()
 
     st.sidebar.download_button(
