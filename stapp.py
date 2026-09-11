@@ -1,4 +1,5 @@
 import datetime
+import io
 import altair as alt
 import numpy as np
 import pandas as pd
@@ -161,6 +162,30 @@ YES_NO_FIELDS = [
     "过去心理咨询",
 ]
 
+# Sidebar edit form options
+CONTACT_OUTCOMES = ["", "本人接听", "家人接听", "无人接听", "语音留言", "号码有误/空号"]
+TREATMENT_OPTIONS = [
+    "个体",
+    "个体（周末）",
+    "家庭",
+    "家庭（周末）",
+    "团体",
+    "团体（周末）",
+    "特诊",
+    "心六百",
+]
+EDITABLE_COLS = [
+    "首访治疗师",
+    "首访时间",
+    "首访情况",
+    "治疗推荐",
+    "未推荐说明",
+    "回访治疗师",
+    "回访时间",
+    "回访情况",
+    "回访治疗安排",
+]
+
 # LIKERT_STYLE
 FREQUENCY_MAP = {1: "没有", 2: "有几天", 3: "一半以上时间", 4: "几乎每天"}
 
@@ -223,8 +248,8 @@ ISI_FIELDS = [65, 72]
 # ---------------------------------------------------------
 # Preprocess function
 @st.cache_data(show_spinner="正在处理数据...")
-def preprocess_data(file) -> pd.DataFrame:
-    df = pd.read_csv(file) if file.name.endswith(".csv") else pd.read_excel(file)
+def preprocess_data(raw_df: pd.DataFrame) -> pd.DataFrame:
+    df = raw_df.copy()
 
     # 1. Standardize string identifier columns
     string_cols = ["联系电话", "求诊者身份证号"]
@@ -292,6 +317,8 @@ def preprocess_data(file) -> pd.DataFrame:
 
     if id_col in df.columns and "提交答卷时间" in df.columns:
         # Sort chronologically so attempt #1 is always the earliest
+        # Preserve original index for edit-save mapping
+        df["_original_idx"] = df.index
         df = df.sort_values("提交答卷时间", ascending=True).reset_index(drop=True)
 
         # 1-indexed attempt number
@@ -301,8 +328,12 @@ def preprocess_data(file) -> pd.DataFrame:
         # Exact date/time of the first/last entry in database
         df["首次登记时间"] = df.groupby(id_col)["提交答卷时间"].transform("min")
         df["最新登记时间"] = df.groupby(id_col)["提交答卷时间"].transform("max")
-        # Check latest progress
-        df["当前治疗进展"] = df.groupby(id_col)["备注"].transform("max")
+        # Check latest progress (support new and legacy column name)
+        _progress_col = (
+            "回访治疗安排" if "回访治疗安排" in df.columns else "备注（回访治疗安排）"
+        )
+        if _progress_col in df.columns:
+            df["当前治疗进展"] = df.groupby(id_col)[_progress_col].transform("max")
     else:
         df["提交次数"] = 1
         df["总提交次数"] = 1
@@ -383,7 +414,27 @@ if not uploaded_file:
     st.info("👈 请在左侧侧边栏上传门诊预约登记表 (CSV / XLSX)。")
     st.stop()
 
-df = preprocess_data(uploaded_file)
+# Store raw data in session state for the edit-and-save workflow
+if (
+    "raw_df" not in st.session_state
+    or st.session_state.get("_file_name") != uploaded_file.name
+):
+    uploaded_file.seek(0)
+    _raw = (
+        pd.read_csv(uploaded_file)
+        if uploaded_file.name.endswith(".csv")
+        else pd.read_excel(uploaded_file)
+    )
+    # Ensure editable columns exist (new files may not have them yet)
+    for col in EDITABLE_COLS:
+        if col not in _raw.columns:
+            _raw[col] = ""
+    # Force string dtype so saving strings to empty (float64) columns won't fail
+    _raw[EDITABLE_COLS] = _raw[EDITABLE_COLS].fillna("").astype(str)
+    st.session_state["raw_df"] = _raw
+    st.session_state["_file_name"] = uploaded_file.name
+
+df = preprocess_data(st.session_state["raw_df"])
 
 # ------------ Sidebar filters-------------
 st.sidebar.header("🔍 档案检索")
@@ -477,6 +528,136 @@ person = filtered_df.iloc[patient_idx]
 st.caption(f"当前第 **{patient_idx + 1}** / **{len(name_options)}** 位求诊者")
 
 # ---------------------------------------------------------
+# Sidebar: Edit Form (placed after patient selection so we have `person`)
+# ---------------------------------------------------------
+
+
+def _safe_str(val, default=""):
+    """Return clean string, treating NaN / None / 'nan' as *default*."""
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return default
+    s = str(val).strip()
+    return default if s in ("nan", "NaT", "") else s
+
+
+def _parse_date(val):
+    """Return a date object or None."""
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return None
+    s = str(val).strip()
+    if s in ("", "nan", "NaT", "None"):
+        return None
+    try:
+        return pd.to_datetime(s).date()
+    except Exception:
+        return None
+
+
+def _parse_multi(val, options):
+    """Parse a comma-separated string into a list of valid options."""
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return []
+    return [v.strip() for v in str(val).split(",") if v.strip() in options]
+
+
+def _safe_index(options, val, default=0):
+    """Return the index of *val* in *options*, or *default*."""
+    s = _safe_str(val)
+    try:
+        return options.index(s)
+    except ValueError:
+        return default
+
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("#### ✏️ 首访 / 回访信息登记")
+
+with st.sidebar.form("edit_patient_form"):
+    # ---- 首访 (first contact) ----
+    st.markdown("**📞 首访**")
+    new_first_therapist = st.text_input(
+        "首访治疗师", value=_safe_str(person.get("首访治疗师"))
+    )
+    new_first_date = st.date_input(
+        "首访时间", value=_parse_date(person.get("首访时间"))
+    )
+    new_first_outcome = st.selectbox(
+        "首访情况",
+        options=CONTACT_OUTCOMES,
+        index=_safe_index(CONTACT_OUTCOMES, person.get("首访情况")),
+    )
+    new_treatment_rec = st.multiselect(
+        "治疗推荐",
+        options=TREATMENT_OPTIONS,
+        default=_parse_multi(person.get("治疗推荐"), TREATMENT_OPTIONS),
+    )
+    new_no_rec_reason = st.text_input(
+        "未推荐说明", value=_safe_str(person.get("未推荐说明"))
+    )
+
+    st.markdown("---")
+
+    # ---- 回访 (follow-up) ----
+    st.markdown("**🔄 回访**")
+    new_followup_therapist = st.text_input(
+        "回访治疗师", value=_safe_str(person.get("回访治疗师"))
+    )
+    new_followup_date = st.date_input(
+        "回访时间", value=_parse_date(person.get("回访时间"))
+    )
+    new_followup_outcome = st.selectbox(
+        "回访情况",
+        options=CONTACT_OUTCOMES,
+        index=_safe_index(CONTACT_OUTCOMES, person.get("回访情况")),
+    )
+    new_followup_notes = st.text_input(
+        "回访治疗安排", value=_safe_str(person.get("回访治疗安排"))
+    )
+
+    submitted = st.form_submit_button("💾 保存修改", use_container_width=True)
+
+# ---- Save logic (runs once on the rerun triggered by the submit button) ----
+if submitted:
+    raw_idx = int(person["_original_idx"])
+    raw_df = st.session_state["raw_df"]
+
+    raw_df.at[raw_idx, "首访治疗师"] = new_first_therapist
+    raw_df.at[raw_idx, "首访时间"] = (
+        str(new_first_date) if new_first_date is not None else ""
+    )
+    raw_df.at[raw_idx, "首访情况"] = new_first_outcome
+    raw_df.at[raw_idx, "治疗推荐"] = (
+        ", ".join(new_treatment_rec) if new_treatment_rec else ""
+    )
+    raw_df.at[raw_idx, "未推荐说明"] = new_no_rec_reason
+    raw_df.at[raw_idx, "回访治疗师"] = new_followup_therapist
+    raw_df.at[raw_idx, "回访时间"] = (
+        str(new_followup_date) if new_followup_date is not None else ""
+    )
+    raw_df.at[raw_idx, "回访情况"] = new_followup_outcome
+    raw_df.at[raw_idx, "回访治疗安排"] = new_followup_notes
+
+    st.cache_data.clear()
+    st.session_state["_save_success"] = True
+    st.rerun()
+
+# Show success feedback after rerun
+if st.session_state.pop("_save_success", False):
+    st.sidebar.success("✅ 修改已保存！请点击下方按钮下载更新后的文件。")
+
+# ---- Download updated file ----
+if "raw_df" in st.session_state:
+    _buf = io.BytesIO()
+    st.session_state["raw_df"].to_excel(_buf, index=False, engine="openpyxl")
+    _buf.seek(0)
+    st.sidebar.download_button(
+        label="📥 下载更新后的文件",
+        data=_buf,
+        file_name=f"updated_{st.session_state.get('_file_name', 'data.xlsx')}",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+# ---------------------------------------------------------
 # Main View: Structured Sections
 # ---------------------------------------------------------
 
@@ -548,26 +729,6 @@ active_risks = [
 
 if any(r in ["自伤意念", "自伤行为", "自杀意念", "自杀想法"] for r in active_risks):
     main.error(f"⚠️ 风险预警指标: {', '.join(active_risks)}")
-
-# 电话评估后的信息变更
-st.markdown("---")
-st.markdown("### 📑 电话评估信息")
-edited_df = st.data_editor(
-    df.loc[
-        [person.name],
-        df.columns[119:124],
-    ],
-    hide_index=True,
-    num_rows="fixed",
-)
-
-# if st.button("提交", type="primary", width="stretch"):
-#     df.update(edited_df)
-#     df.to_excel(uploaded_file.name, index=False)
-
-# Update only the edited cells in the main dataframe
-
-# Save back to disk
 
 # Organize 112 columns into Tabs
 tab1, tab2, tab3, tab4, tab5 = main.tabs(
