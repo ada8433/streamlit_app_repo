@@ -57,6 +57,7 @@ def run_tests():
     assert "crisis_risks_list" in clean_df.columns, "crisis_risks_list missing!"
     assert "treatment_goals_list" in clean_df.columns, "treatment_goals_list missing!"
     assert "cohabitants_list" in clean_df.columns, "cohabitants_list missing!"
+    assert "family_support_dict" in clean_df.columns, "family_support_dict missing!"
 
     row0 = clean_df.iloc[0]
     print("=== Sample Cleaned Record ===")
@@ -71,6 +72,13 @@ def run_tests():
     print("Crisis Flags:", row0.get("crisis_risk_flags"))
     print("Treatment Goals:", row0.get("treatment_goals_list"))
     print("Cohabitants:", row0.get("cohabitants_list"))
+    print("Family Support Dict:", row0.get("family_support_dict"))
+    assert isinstance(row0.get("family_support_dict"), dict), (
+        "family_support_dict should be dict!"
+    )
+    assert "夫妻（恋人）" in row0.get("family_support_dict"), (
+        "Missing 夫妻（恋人） in family_support_dict!"
+    )
 
     # Verify scale score columns
     for i in range(len(PHQ_LABELS)):

@@ -15,9 +15,9 @@ from mappings import (
     CONTACT_OUTCOMES,
     DIAGNOSIS_PREFIX,
     EDITABLE_COLS,
-    FREQUENCY_MAP,
+    FAMILY_SUPPORT_ITEMS,
+    FAMILY_SUPPORT_MAP,
     GAD_FIELDS,
-    GAD_FREQUENCY_MAP,
     GAD_ITEM_PATTERNS,
     GAD_LABELS,
     GOAL_PREFIX,
@@ -31,7 +31,6 @@ from mappings import (
     PHQ_LABELS,
     RISK_PREFIX,
     SUBJECTIVE_SUPPORT_PREFIX,
-    TEXT_TO_SCORE,
     WORKING_COMPAT_COLS,
     YES_NO_FIELDS,
     YES_NO_MAP,
@@ -215,6 +214,35 @@ def map_categorical_choices(df: pd.DataFrame) -> pd.DataFrame:
 
             clean_df[col] = clean_df[col].apply(_map_yes_no)
 
+    # Standardize & map Family Support matrix items (SSRS Q37)
+    def _map_fam_support(val):
+        if pd.isna(val) or val == "" or val is None:
+            return NOT_APPLICABLE_VALUE
+        s = str(val).strip()
+        if s.endswith(".0"):
+            s = s[:-2]
+        if s in ("-3", NOT_APPLICABLE_VALUE, "不适用"):
+            return NOT_APPLICABLE_VALUE
+        if s in ("nan", "None", "NaT"):
+            return NOT_APPLICABLE_VALUE
+        return FAMILY_SUPPORT_MAP.get(s, s)
+
+    family_dict_records = []
+    for _, row in clean_df.iterrows():
+        rec = {}
+        for label, candidates in FAMILY_SUPPORT_ITEMS:
+            val = NOT_APPLICABLE_VALUE
+            for c in candidates:
+                if c in clean_df.columns:
+                    val = _map_fam_support(row[c])
+                    break
+            rec[label] = val
+        family_dict_records.append(rec)
+
+    clean_df["family_support_dict"] = family_dict_records
+    for label, _ in FAMILY_SUPPORT_ITEMS:
+        clean_df[f"家庭支持_{label}"] = [d[label] for d in family_dict_records]
+
     return clean_df
 
 
@@ -293,27 +321,14 @@ def _find_scale_columns(
 
 
 def _score_scale_item(val, max_score: int = 3) -> int:
-    """Safely convert survey item response (digit 1-5 or text) into standard Likert score."""
+    """Safely convert a 1-indexed survey response integer into a 0-indexed Likert score."""
     if pd.isna(val) or val is None or val == "":
         return 0
-
     val_str = str(val).strip()
     if val_str in (NOT_APPLICABLE_VALUE, "不适用", "-3", "-3.0", "not applicable"):
         return 0
-
-    # If text choice is recognized
-    if val_str in TEXT_TO_SCORE:
-        return min(TEXT_TO_SCORE[val_str], max_score)
-
-    # If numeric string or float/int
     try:
-        num = float(val_str)
-        if num < 0:
-            return 0
-        # Survey export encodes Likert options as 1-indexed (1, 2, 3, 4, 5)
-        # Map to 0-indexed standard Likert score (0, 1, 2, 3, 4)
-        score = int(num) - 1
-        return max(0, min(score, max_score))
+        return max(0, min(int(float(val_str)) - 1, max_score))
     except (ValueError, TypeError):
         return 0
 
@@ -336,8 +351,6 @@ def compute_clinical_scales(df: pd.DataFrame) -> pd.DataFrame:
             clean_df[score_col] = clean_df[col].apply(
                 lambda v: _score_scale_item(v, max_score=3)
             )
-            # Format original column text for clean UI presentation
-            clean_df[col] = clean_df[col].replace(FREQUENCY_MAP)
         else:
             clean_df[score_col] = 0
 
@@ -367,7 +380,6 @@ def compute_clinical_scales(df: pd.DataFrame) -> pd.DataFrame:
             clean_df[score_col] = clean_df[col].apply(
                 lambda v: _score_scale_item(v, max_score=3)
             )
-            clean_df[col] = clean_df[col].replace(GAD_FREQUENCY_MAP)
         else:
             clean_df[score_col] = 0
 

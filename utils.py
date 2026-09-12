@@ -94,16 +94,21 @@ _safe_index = safe_index
 # ---------------------------------------------------------
 # Visualization Helpers
 # ---------------------------------------------------------
-def plot_scale_breakdown(item_names, scores, max_score=3, title="条目明细分布"):
+def plot_scale_breakdown(
+    item_names, scores, max_score=3, title="条目明细分布", height=None
+):
     """Render a horizontal bar chart breakdown of psychometric scale items."""
     chart_data = pd.DataFrame({"条目": item_names, "得分": scores})
+    calc_height = height or max(260, len(item_names) * 35)
 
     chart = (
         alt.Chart(chart_data)
         .mark_bar(cornerRadiusEnd=4)
         .encode(
             x=alt.X(
-                "得分:Q", scale=alt.Scale(domain=[0, max_score]), title="得分 (0-3)"
+                "得分:Q",
+                scale=alt.Scale(domain=[0, max_score]),
+                title=f"得分 (0-{max_score})",
             ),
             y=alt.Y("条目:N", sort=None),
             color=alt.Color(
@@ -113,7 +118,7 @@ def plot_scale_breakdown(item_names, scores, max_score=3, title="条目明细分
             ),
             tooltip=["条目", "得分"],
         )
-        .properties(title=title, height=320)
+        .properties(title=title, height=calc_height)
     )
 
     text = chart.mark_text(align="left", baseline="middle", dx=3).encode(text="得分:Q")
