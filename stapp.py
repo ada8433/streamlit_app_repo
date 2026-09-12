@@ -9,7 +9,6 @@ from mappings import (
     GAD_LABELS,
     PHQ_FIELDS,
     PHQ_LABELS,
-    TEXT_TO_SCORE,
     TREATMENT_OPTIONS,
 )
 from preprocessing import load_raw_data, preprocess_data
@@ -426,8 +425,6 @@ with tab2:
 # TAB 3: Scales (PHQ-9, GAD-7, ISI)
 # ---------------------------------------------------------
 with tab3:
-    phq_cols = df.columns[PHQ_FIELDS[0] : PHQ_FIELDS[1]]
-    gad_cols = df.columns[GAD_FIELDS[0] : GAD_FIELDS[1]]
     phq_cols = (
         df.columns[PHQ_FIELDS[0] : PHQ_FIELDS[1]]
         if len(df.columns) >= PHQ_FIELDS[1]
@@ -438,10 +435,6 @@ with tab3:
         if len(df.columns) >= GAD_FIELDS[1]
         else []
     )
-
-    # Raw option text mapping back to scores (0..3)
-    phq_scores = [TEXT_TO_SCORE.get(person[c], 0) for c in phq_cols]
-    gad_scores = [TEXT_TO_SCORE.get(person[c], 0) for c in gad_cols]
     # Use pre-computed item scores from pipeline (0..3)
     phq_scores = [int(person.get(f"_phq_score_{i}", 0)) for i in range(len(PHQ_LABELS))]
     gad_scores = [int(person.get(f"_gad_score_{i}", 0)) for i in range(len(GAD_LABELS))]
