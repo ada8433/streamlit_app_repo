@@ -122,7 +122,9 @@ def parse_datetime_fields(df: pd.DataFrame) -> pd.DataFrame:
     """Parse submission timestamps and therapist contact dates."""
     clean_df = df.copy()
     if "提交答卷时间" in clean_df.columns:
-        clean_df["提交答卷时间"] = pd.to_datetime(clean_df["提交答卷时间"], errors="coerce")
+        clean_df["提交答卷时间"] = pd.to_datetime(
+            clean_df["提交答卷时间"], errors="coerce"
+        )
     return clean_df
 
 
@@ -136,6 +138,7 @@ def map_categorical_choices(df: pd.DataFrame) -> pd.DataFrame:
     # Map multiple-choice questions
     for col, choice_map in CHOICE_MAPS.items():
         if col in clean_df.columns:
+
             def _map_choice(val):
                 if pd.isna(val) or val == "" or val is None:
                     return ""
@@ -150,6 +153,7 @@ def map_categorical_choices(df: pd.DataFrame) -> pd.DataFrame:
     # Map binary fields
     for col in YES_NO_FIELDS:
         if col in clean_df.columns:
+
             def _map_yes_no(val):
                 if pd.isna(val) or val == "" or val is None:
                     return ""
@@ -172,7 +176,7 @@ def _extract_selected_labels(row: pd.Series, prefix: str) -> List[str]:
     for col_name in row.index:
         if col_name.startswith(prefix) and "(" in col_name and col_name.endswith(")"):
             val = row[col_name]
-            # Consider 1, '1', 1.0, '1.0', '是', True as selected
+            # Consider 1, '1', 1.0, '是', True as selected
             if val in (1, "1", 1.0, "1.0", "是", True):
                 label = col_name[len(prefix) : -1].strip()
                 selected.append(label)
@@ -196,9 +200,13 @@ def consolidate_multiselect_groups(df: pd.DataFrame) -> pd.DataFrame:
     ]
 
     for prefix, en_col, cn_col in groups:
-        matching_cols = [c for c in clean_df.columns if c.startswith(prefix) and "(" in c]
+        matching_cols = [
+            c for c in clean_df.columns if c.startswith(prefix) and "(" in c
+        ]
         if matching_cols:
-            extracted_series = clean_df.apply(lambda r: _extract_selected_labels(r, prefix), axis=1)
+            extracted_series = clean_df.apply(
+                lambda r: _extract_selected_labels(r, prefix), axis=1
+            )
             clean_df[en_col] = extracted_series
             clean_df[cn_col] = extracted_series
         else:
@@ -269,7 +277,9 @@ def compute_clinical_scales(df: pd.DataFrame) -> pd.DataFrame:
         score_col = f"_phq_score_{idx}"
         phq_score_cols.append(score_col)
         if col and col in clean_df.columns:
-            clean_df[score_col] = clean_df[col].apply(lambda v: _score_scale_item(v, max_score=3))
+            clean_df[score_col] = clean_df[col].apply(
+                lambda v: _score_scale_item(v, max_score=3)
+            )
             # Format original column text for clean UI presentation
             clean_df[col] = clean_df[col].replace(FREQUENCY_MAP)
         else:
@@ -298,7 +308,9 @@ def compute_clinical_scales(df: pd.DataFrame) -> pd.DataFrame:
         score_col = f"_gad_score_{idx}"
         gad_score_cols.append(score_col)
         if col and col in clean_df.columns:
-            clean_df[score_col] = clean_df[col].apply(lambda v: _score_scale_item(v, max_score=3))
+            clean_df[score_col] = clean_df[col].apply(
+                lambda v: _score_scale_item(v, max_score=3)
+            )
             clean_df[col] = clean_df[col].replace(GAD_FREQUENCY_MAP)
         else:
             clean_df[score_col] = 0
@@ -324,7 +336,9 @@ def compute_clinical_scales(df: pd.DataFrame) -> pd.DataFrame:
         score_col = f"_isi_score_{idx}"
         isi_score_cols.append(score_col)
         if col and col in clean_df.columns:
-            clean_df[score_col] = clean_df[col].apply(lambda v: _score_scale_item(v, max_score=4))
+            clean_df[score_col] = clean_df[col].apply(
+                lambda v: _score_scale_item(v, max_score=4)
+            )
         else:
             clean_df[score_col] = 0
 
@@ -345,7 +359,9 @@ def compute_clinical_scales(df: pd.DataFrame) -> pd.DataFrame:
     def _check_crisis_risk(row: pd.Series) -> bool:
         # Check explicit self-harm / suicide checkbox options
         risks = row.get("crisis_risks_list", [])
-        has_q25_risk = any(r in ["自伤意念", "自伤行为", "自杀意念", "自杀想法"] for r in risks)
+        has_q25_risk = any(
+            r in ["自伤意念", "自伤行为", "自杀意念", "自杀想法"] for r in risks
+        )
         # Check PHQ Item 9 (Suicidal ideation item score > 0)
         has_phq9_risk = row.get("_phq_score_8", 0) > 0
         return has_q25_risk or has_phq9_risk
@@ -377,24 +393,36 @@ def track_longitudinal_patient_history(df: pd.DataFrame) -> pd.DataFrame:
 
     if id_col in clean_df.columns and "提交答卷时间" in clean_df.columns:
         # Sort chronologically so attempt #1 is always the earliest
-        clean_df = clean_df.sort_values("提交答卷时间", ascending=True).reset_index(drop=True)
+        clean_df = clean_df.sort_values("提交答卷时间", ascending=True).reset_index(
+            drop=True
+        )
 
         # 1-indexed attempt number
         clean_df["提交次数"] = clean_df.groupby(id_col).cumcount() + 1
         # Total number of entries for this patient
         clean_df["总提交次数"] = clean_df.groupby(id_col)[id_col].transform("count")
         # Exact date/time of the first/last entry in database
-        clean_df["首次登记时间"] = clean_df.groupby(id_col)["提交答卷时间"].transform("min")
-        clean_df["最新登记时间"] = clean_df.groupby(id_col)["提交答卷时间"].transform("max")
+        clean_df["首次登记时间"] = clean_df.groupby(id_col)["提交答卷时间"].transform(
+            "min"
+        )
+        clean_df["最新登记时间"] = clean_df.groupby(id_col)["提交答卷时间"].transform(
+            "max"
+        )
 
         # Check latest progress (support new and legacy column names)
         progress_col = (
             "回访治疗安排"
             if "回访治疗安排" in clean_df.columns
-            else ("备注（回访治疗安排）" if "备注（回访治疗安排）" in clean_df.columns else None)
+            else (
+                "备注（回访治疗安排）"
+                if "备注（回访治疗安排）" in clean_df.columns
+                else None
+            )
         )
         if progress_col:
-            clean_df["当前治疗进展"] = clean_df.groupby(id_col)[progress_col].transform("max")
+            clean_df["当前治疗进展"] = clean_df.groupby(id_col)[progress_col].transform(
+                "max"
+            )
         else:
             clean_df["当前治疗进展"] = "-"
     else:
