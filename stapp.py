@@ -228,6 +228,7 @@ if submitted:
 # Show success feedback after rerun
 if st.session_state.pop("_save_success", False):
     st.sidebar.success("✅ 修改已保存！请点击下方按钮下载更新后的文件。")
+    st.toast("修改已保存！", icon="✅")
 
 # ---- Download updated file ----
 if "raw_df" in st.session_state:
