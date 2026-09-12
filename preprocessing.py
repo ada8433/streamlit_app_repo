@@ -81,20 +81,31 @@ def sanitize_special_and_missing_values(df: pd.DataFrame) -> pd.DataFrame:
     """
     Sanitize survey conditional jump codes (-3) and missing text values.
     1. Replaces -3, -3.0, '-3', '-3.0' with NOT_APPLICABLE_VALUE ('不适用').
-    2. Fills missing NaN values in object/text columns with '' so they don't render as 'nan'.
+    2. Fills missing NaN values in text/object/string columns with '' so they don't render as 'nan'.
     """
     clean_df = df.copy()
+    na_markers = {-3, -3.0, "-3", "-3.0"}
 
-    # Step 1: Normalize -3 conditional jump markers across the entire dataframe
-    na_markers = [-3, -3.0, "-3", "-3.0"]
-    clean_df = clean_df.replace(na_markers, NOT_APPLICABLE_VALUE)
+    # Process column-by-column to avoid pandas 2.x CoW block manager IndexError bug
+    for col in clean_df.columns:
+        s = clean_df[col]
+        if pd.api.types.is_datetime64_any_dtype(s):
+            continue
 
-    # Step 2: Ensure object/text columns don't carry NaN or literal 'nan' strings
-    object_cols = clean_df.select_dtypes(include=["object"]).columns
-    clean_df[object_cols] = clean_df[object_cols].fillna("")
-    clean_df[object_cols] = clean_df[object_cols].replace(
-        {"nan": "", "None": "", "NaT": ""}
-    )
+        if pd.api.types.is_numeric_dtype(s):
+            if s.isin([-3, -3.0]).any():
+                clean_df[col] = s.replace([-3, -3.0], NOT_APPLICABLE_VALUE)
+        else:
+            # String, object, categorical, and mixed text columns
+            clean_df[col] = s.map(
+                lambda x: NOT_APPLICABLE_VALUE
+                if x in na_markers
+                else (
+                    ""
+                    if (pd.isna(x) or str(x).strip() in ("nan", "None", "NaT"))
+                    else x
+                )
+            )
 
     return clean_df
 
