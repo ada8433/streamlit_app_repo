@@ -24,6 +24,7 @@ from mappings import (
     ISI_FIELDS,
     ISI_ITEM_PATTERNS,
     ISI_LABELS,
+    NOT_APPLICABLE_VALUE,
     OBJECTIVE_SUPPORT_PREFIX,
     PHQ_FIELDS,
     PHQ_ITEM_PATTERNS,
@@ -74,6 +75,31 @@ def ensure_administrative_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------
+# Pipeline Stage 1b: Special Values & Missing Text Sanitization
+# ---------------------------------------------------------
+def sanitize_special_and_missing_values(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Sanitize survey conditional jump codes (-3) and missing text values.
+    1. Replaces -3, -3.0, '-3', '-3.0' with NOT_APPLICABLE_VALUE ('不适用').
+    2. Fills missing NaN values in object/text columns with '' so they don't render as 'nan'.
+    """
+    clean_df = df.copy()
+
+    # Step 1: Normalize -3 conditional jump markers across the entire dataframe
+    na_markers = [-3, -3.0, "-3", "-3.0"]
+    clean_df = clean_df.replace(na_markers, NOT_APPLICABLE_VALUE)
+
+    # Step 2: Ensure object/text columns don't carry NaN or literal 'nan' strings
+    object_cols = clean_df.select_dtypes(include=["object"]).columns
+    clean_df[object_cols] = clean_df[object_cols].fillna("")
+    clean_df[object_cols] = clean_df[object_cols].replace(
+        {"nan": "", "None": "", "NaT": ""}
+    )
+
+    return clean_df
+
+
+# ---------------------------------------------------------
 # Pipeline Stage 2: Identifiers & Demographics Sanitization
 # ---------------------------------------------------------
 def clean_identifiers_and_demographics(df: pd.DataFrame) -> pd.DataFrame:
@@ -86,6 +112,7 @@ def clean_identifiers_and_demographics(df: pd.DataFrame) -> pd.DataFrame:
         if col in clean_df.columns:
             clean_df[col] = (
                 clean_df[col]
+                .fillna("")
                 .astype(str)
                 .str.replace(r"\.0$", "", regex=True)
                 .str.replace(r"\D+", "", regex=True)
@@ -97,16 +124,19 @@ def clean_identifiers_and_demographics(df: pd.DataFrame) -> pd.DataFrame:
         if col in clean_df.columns:
             clean_df[col] = (
                 clean_df[col]
+                .fillna("")
                 .astype(str)
                 .str.strip()
                 .str.replace(r"\.0$", "", regex=True)
             )
+            clean_df.loc[clean_df[col].isin(["nan", "None", "NaT"]), col] = ""
 
     # Names: strip whitespace
     name_cols = ["姓名（实名）", "求诊者姓名", "紧急联系人的姓名"]
     for col in name_cols:
         if col in clean_df.columns:
-            clean_df[col] = clean_df[col].astype(str).str.strip()
+            clean_df[col] = clean_df[col].fillna("").astype(str).str.strip()
+            clean_df.loc[clean_df[col].isin(["nan", "None", "NaT"]), col] = ""
 
     # Numeric age
     if "年龄" in clean_df.columns:
@@ -146,6 +176,10 @@ def map_categorical_choices(df: pd.DataFrame) -> pd.DataFrame:
                 s = str(val).strip()
                 if s.endswith(".0"):
                     s = s[:-2]
+                if s in ("-3", NOT_APPLICABLE_VALUE, "不适用"):
+                    return NOT_APPLICABLE_VALUE
+                if s in ("nan", "None", "NaT"):
+                    return ""
                 return choice_map.get(s, s)
 
             clean_df[col] = clean_df[col].apply(_map_choice)
@@ -160,6 +194,10 @@ def map_categorical_choices(df: pd.DataFrame) -> pd.DataFrame:
                 s = str(val).strip()
                 if s.endswith(".0"):
                     s = s[:-2]
+                if s in ("-3", NOT_APPLICABLE_VALUE, "不适用"):
+                    return NOT_APPLICABLE_VALUE
+                if s in ("nan", "None", "NaT"):
+                    return ""
                 return YES_NO_MAP.get(s, YES_NO_MAP.get(val, s))
 
             clean_df[col] = clean_df[col].apply(_map_yes_no)
@@ -247,6 +285,9 @@ def _score_scale_item(val, max_score: int = 3) -> int:
         return 0
 
     val_str = str(val).strip()
+    if val_str in (NOT_APPLICABLE_VALUE, "不适用", "-3", "-3.0", "not applicable"):
+        return 0
+
     # If text choice is recognized
     if val_str in TEXT_TO_SCORE:
         return min(TEXT_TO_SCORE[val_str], max_score)
@@ -254,6 +295,8 @@ def _score_scale_item(val, max_score: int = 3) -> int:
     # If numeric string or float/int
     try:
         num = float(val_str)
+        if num < 0:
+            return 0
         # Survey export encodes Likert options as 1-indexed (1, 2, 3, 4, 5)
         # Map to 0-indexed standard Likert score (0, 1, 2, 3, 4)
         score = int(num) - 1
@@ -446,6 +489,7 @@ def run_cleaning_pipeline(raw_df: pd.DataFrame) -> pd.DataFrame:
     return (
         raw_df.copy()
         .pipe(ensure_administrative_columns)
+        .pipe(sanitize_special_and_missing_values)
         .pipe(clean_identifiers_and_demographics)
         .pipe(parse_datetime_fields)
         .pipe(map_categorical_choices)

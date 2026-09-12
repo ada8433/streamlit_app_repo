@@ -14,6 +14,7 @@ from mappings import (
 )
 from preprocessing import load_raw_data, preprocess_data
 from utils import (
+    format_value,
     get_diagnoses,
     parse_date,
     parse_multi,
@@ -148,6 +149,7 @@ with col_dropdown:
 # Active record
 patient_idx = name_options.index(selected_label)
 person = filtered_df.iloc[patient_idx]
+pget = lambda col, default="-": format_value(person.get(col), default=default)
 
 st.caption(f"当前第 **{patient_idx + 1}** / **{len(name_options)}** 位求诊者")
 
@@ -249,14 +251,14 @@ if "raw_df" in st.session_state:
 # ---------------------------------------------------------
 
 # Patient Demo Banner
-phone_number = phone_num_slicer(person.get("联系电话", "-"))
+phone_number = phone_num_slicer(pget("联系电话", "-"))
 st.title(
-    f"👤 {person.get('姓名（实名）', '未知')} | \
-                {person.get('年龄', '未填')} 岁| \
-                {person.get('性别', '未填')} |\
-                📞{phone_number}\
-                :violet-badge[💬 {person.get('请选择您需要预约登记的治疗方式')}]\
-                :blue-badge[{person.get('首访治疗师', '-')}]"
+    f"👤 {pget('姓名（实名）', '未知')} | "
+    f"{pget('年龄', '未填')} 岁 | "
+    f"{pget('性别', '未填')} | "
+    f"📞 {phone_number} "
+    f":violet-badge[💬 {pget('请选择您需要预约登记的治疗方式', '未选')}] "
+    f":blue-badge[{pget('首访治疗师', '-')}]"
 )
 
 # Repeat Submission Alert & First Entry Notice
@@ -357,27 +359,27 @@ with tab1:
     col1, col2, col3 = st.columns(3)
     with col1:
         st.markdown("### 🆔 身份证明")
-        st.write(f"**姓名**：{person.get('姓名（实名）', '-')}")
-        st.write(f"**身份证号**：{person.get('求诊者身份证号', '-')}")
-        st.write(f"**联系电话**：{person.get('联系电话', '-')}")
-        st.write(f"**常住地**：{person.get('您的常住地为', '-')}")
-        st.write(f"**户籍地**：{person.get('您的户籍所在地', '-')}")
+        st.write(f"**姓名**：{pget('姓名（实名）')}")
+        st.write(f"**身份证号**：{pget('求诊者身份证号')}")
+        st.write(f"**联系电话**：{pget('联系电话')}")
+        st.write(f"**常住地**：{pget('您的常住地为')}")
+        st.write(f"**户籍地**：{pget('您的户籍所在地')}")
 
     with col2:
         st.markdown("### 🎓 社会人口学资料")
-        st.write(f"**教育水平**：{person.get('教育水平', '-')}")
-        st.write(f"**职业**：{person.get('职业', '-')}")
-        st.write(f"**年级**：{person.get('年级', '-')}")
-        st.write(f"**休学/离职状态**：{person.get('目前是否已经休学/休假或离职', '-')}")
+        st.write(f"**教育水平**：{pget('教育水平')}")
+        st.write(f"**职业**：{pget('职业')}")
+        st.write(f"**年级**：{pget('年级')}")
+        st.write(f"**休学/离职状态**：{pget('目前是否已经休学/休假或离职')}")
         st.write(
-            f"**婚姻/生育状态**：{person.get('婚姻状态', '-')}, {person.get('生育状态', '-')} (孩子数: {person.get('孩子个数', '-')})"
+            f"**婚姻/生育状态**：{pget('婚姻状态')}, {pget('生育状态')} (孩子数: {pget('孩子个数')})"
         )
 
     with col3:
         st.markdown("### 📞 紧急联系人")
-        st.write(f"**紧急联系人**：{person.get('紧急联系人的姓名', '-')}")
-        st.write(f"**关系**：{person.get('紧急联系人与来访的关系：', '-')}")
-        st.write(f"**联系电话**：{person.get('紧急联系人电话（手机号）', '-')}")
+        st.write(f"**紧急联系人**：{pget('紧急联系人的姓名')}")
+        st.write(f"**关系**：{pget('紧急联系人与来访的关系：')}")
+        st.write(f"**联系电话**：{pget('紧急联系人电话（手机号）')}")
 
 # ---------------------------------------------------------
 # TAB 2: Clinical & Medication History
@@ -386,22 +388,20 @@ with tab2:
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("### 🏥 诊疗背景")
-        st.write(f"**病程（月）**：{person.get('病程（月）', '-')}")
-        st.write(f"**首次来院年份**：{person.get('首次来我院就诊年份', '-')}")
-        st.write(f"**本院就诊经历**：{person.get('是否曾在本院心理咨询门诊就诊', '-')}")
+        st.write(f"**病程（月）**：{pget('病程（月）')}")
+        st.write(f"**首次来院年份**：{pget('首次来我院就诊年份')}")
+        st.write(f"**本院就诊经历**：{pget('是否曾在本院心理咨询门诊就诊')}")
         st.write(
-            f"**重大生活事件**：{person.get('半年内是否经历重大生活事件', '-')} ({person.get('请注明具体事件', '无说明')})"
+            f"**重大生活事件**：{pget('半年内是否经历重大生活事件')} ({pget('请注明具体事件', '无说明')})"
         )
-        st.write(f"**家族史**：{person.get('是否有精神/心理疾病家族史', '-')}")
-        st.write(f"**躯体疾病**：{person.get('是否有躯体疾病', '-')}")
+        st.write(f"**家族史**：{pget('是否有精神/心理疾病家族史')}")
+        st.write(f"**躯体疾病**：{pget('是否有躯体疾病')}")
 
     with col2:
         st.markdown("### 💊 药物使用与安全状态")
-        st.write(f"**目前是否服药**：{person.get('目前是否在服用精神科药物', '-')}")
-        st.write(
-            f"**药物名称/时间/剂量**：{person.get('服用药物名称，服用时间，剂量', '-')}"
-        )
-        st.write(f"**未服药情况**：{person.get('未服药情况', '-')}")
+        st.write(f"**目前是否服药**：{pget('目前是否在服用精神科药物')}")
+        st.write(f"**药物名称/时间/剂量**：{pget('服用药物名称，服用时间，剂量')}")
+        st.write(f"**未服药情况**：{pget('未服药情况')}")
 
         # Symptoms list
         symptoms_cols = [c for c in df.columns if "19(" in c]
@@ -452,25 +452,23 @@ with tab3:
         plot_scale_breakdown(
             PHQ_LABELS, phq_scores, max_score=3, title="PHQ-9 抑郁症状条目得分"
         )
-        st.write(f"#### PHQ总分：{person.get('PHQ_Total', '-')}")
         phq_sev = person.get("PHQ_Severity", "")
         phq_sev_str = f" ({phq_sev})" if phq_sev else ""
         st.write(f"#### PHQ总分：{person.get('PHQ_Total', '-')}{phq_sev_str}")
         st.markdown("#### PHQ-9 项目摘要")
         for c in phq_cols[:9]:
-            st.write(f"• **{c.split('—')[-1]}**: {person.get(c, '-')}")
+            st.write(f"• **{c.split('—')[-1]}**: {format_value(person.get(c, '-'))}")
 
     with c2:
         plot_scale_breakdown(
             GAD_LABELS, gad_scores, max_score=3, title="GAD-7 焦虑症状条目得分"
         )
-        st.write(f"#### GAD总分：{person.get('GAD_Total', '-')}")
         gad_sev = person.get("GAD_Severity", "")
         gad_sev_str = f" ({gad_sev})" if gad_sev else ""
         st.write(f"#### GAD总分：{person.get('GAD_Total', '-')}{gad_sev_str}")
         st.markdown("#### GAD-7 项目摘要")
         for c in gad_cols[:7]:
-            st.write(f"• **{c.split('—')[-1]}**: {person.get(c, '-')}")
+            st.write(f"• **{c.split('—')[-1]}**: {format_value(person.get(c, '-'))}")
 
 # ---------------------------------------------------------
 # TAB 4: Social Support Network
@@ -478,10 +476,10 @@ with tab3:
 with tab4:
     st.markdown("### 🤝 社会支持评估")
     st.write(
-        f"**密切联系的朋友数**：{person.get('您有多少关系密切，可以得到支持和帮助的朋友？（只选一项）', '-')}"
+        f"**密切联系的朋友数**：{pget('您有多少关系密切，可以得到支持和帮助的朋友？（只选一项）')}"
     )
     st.write(
-        f"**倾诉意愿**：{person.get('您遇到烦恼时会主动倾诉吗：（只选一项）', '-')} | **主要倾诉对象：** {person.get('下列来源中哪一项是您遇到烦恼时最主要倾诉对象？（只选一项）', '-')}"
+        f"**倾诉意愿**：{pget('您遇到烦恼时会主动倾诉吗：（只选一项）')} | **主要倾诉对象：** {pget('下列来源中哪一项是您遇到烦恼时最主要倾诉对象？（只选一项）')}"
     )
     obj_support = person.get("objective_support_list", [])
     subj_support = person.get("subjective_support_list", [])
@@ -496,9 +494,6 @@ with tab4:
 with tab5:
     st.markdown("### 🎯 治疗目标与诉求")
     goal_cols = [c for c in df.columns if "目标(" in c]
-    selected_goals = [
-        c.replace("目标(", "").replace(")", "") for c in goal_cols if person.get(c) == 1
-    ]
     selected_goals = person.get("treatment_goals_list")
     if not selected_goals:
         goal_cols = [c for c in df.columns if "目标(" in c]
@@ -511,9 +506,11 @@ with tab5:
     st.write(
         f"**心理治疗目标**：{' | '.join(selected_goals) if selected_goals else '未明确选定'}"
     )
-    st.write(
-        f"**预约登记的治疗方式**：{person.get('请选择您需要预约登记的治疗方式', '-')}"
+    st.write(f"**预约登记的治疗方式**：{pget('请选择您需要预约登记的治疗方式')}")
+    st.write(f"**过去心理咨询经历**：{pget('过去心理咨询')}")
+    st.info(
+        f"{pget('其他需要备注说明的信息：', '无')}",
+        title="**来访备注**",
+        icon="🙋",
     )
-    st.write(f"**过去心理咨询经历**：{person.get('过去心理咨询', '-')}")
-    st.write(f"**电话评估治疗师**：:blue-badge[{person.get('首访治疗师', '-')}]")
-    st.info(f"**其他备注信息**：{person.get('其他需要备注说明的信息：', '无')}")
+    st.info(f"{pget('备注', '无')}", title="**治疗师备注**", icon="🧑‍⚕️")

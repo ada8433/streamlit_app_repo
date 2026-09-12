@@ -181,9 +181,13 @@ CHOICE_MAPS = {
 }
 
 # ---------------------------------------------------------
+# Special / Conditional Values
+# ---------------------------------------------------------
+NOT_APPLICABLE_VALUE = "不适用"
+
+# ---------------------------------------------------------
 # Binary (Yes/No) Fields
 # ---------------------------------------------------------
-YES_NO_MAP = {1: "是", 2: "否"}
 YES_NO_MAP = {
     1: "是",
     2: "否",
@@ -193,6 +197,10 @@ YES_NO_MAP = {
     2.0: "否",
     "是": "是",
     "否": "否",
+    -3: NOT_APPLICABLE_VALUE,
+    "-3": NOT_APPLICABLE_VALUE,
+    -3.0: NOT_APPLICABLE_VALUE,
+    "-3.0": NOT_APPLICABLE_VALUE,
 }
 
 YES_NO_FIELDS = [
@@ -318,6 +326,11 @@ TEXT_TO_SCORE = {
     "非常满意": 0,
     "0": 0,
     0: 0,
+    NOT_APPLICABLE_VALUE: 0,
+    "-3": 0,
+    -3: 0,
+    "-3.0": 0,
+    -3.0: 0,
     # 1 score
     "有几天": 1,
     "好几天": 1,

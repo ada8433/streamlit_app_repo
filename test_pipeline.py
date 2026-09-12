@@ -11,10 +11,12 @@ from mappings import (
     EDITABLE_COLS,
     GAD_LABELS,
     ISI_LABELS,
+    NOT_APPLICABLE_VALUE,
     PHQ_LABELS,
     WORKING_COMPAT_COLS,
 )
 from preprocessing import load_raw_data, preprocess_data
+from utils import format_value
 
 
 def run_tests():
@@ -100,6 +102,40 @@ def run_tests():
         )
 
     print("✅ Stage 1: Edit-Save simulation and working columns preservation passed.")
+
+    # --- Test Stage 2: Special Values (-3 & empty cells) ---
+    print("=== Testing Special Values (-3 & empty cells) ===")
+    assert format_value(None) == "-"
+    assert format_value(float("nan")) == "-"
+    assert format_value("nan") == "-"
+    assert format_value("") == "-"
+    assert format_value("-3") == NOT_APPLICABLE_VALUE
+    assert format_value(-3) == NOT_APPLICABLE_VALUE
+    assert format_value(-3.0) == NOT_APPLICABLE_VALUE
+    assert format_value(NOT_APPLICABLE_VALUE) == NOT_APPLICABLE_VALUE
+    assert format_value("正常文本") == "正常文本"
+    assert format_value(None, default="无") == "无"
+
+    # Inject test row with -3 and empty cells
+    test_raw = loaded_raw.copy()
+    test_raw.at[0, "半年内是否经历重大生活事件"] = -3
+    test_raw.at[0, "请注明具体事件"] = float("nan")
+    test_raw.at[0, "服用药物名称，服用时间，剂量"] = "-3"
+
+    processed_test = preprocess_data(test_raw)
+    p_row = processed_test.iloc[0]
+
+    assert p_row["半年内是否经历重大生活事件"] == NOT_APPLICABLE_VALUE, (
+        f"Expected {NOT_APPLICABLE_VALUE}, got {p_row['半年内是否经历重大生活事件']}"
+    )
+    assert p_row["服用药物名称，服用时间，剂量"] == NOT_APPLICABLE_VALUE, (
+        f"Expected {NOT_APPLICABLE_VALUE}, got {p_row['服用药物名称，服用时间，剂量']}"
+    )
+    assert p_row["请注明具体事件"] == "", (
+        f"Expected empty string for NaN text field, got {p_row['请注明具体事件']!r}"
+    )
+
+    print("✅ Stage 2: -3 and NaN text field sanitization passed.")
     print("✅ All assertions passed successfully!")
 
 

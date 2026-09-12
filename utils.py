@@ -29,6 +29,24 @@ def get_diagnoses(diagnosis_columns, person) -> list:
 # ---------------------------------------------------------
 # Safe Parsing & Indexing Helpers for Forms
 # ---------------------------------------------------------
+def format_value(val, default="-", na_text="不适用") -> str:
+    """
+    Format a survey or patient profile field for clean UI display.
+    Treats NaN, None, 'nan', 'NaT', 'None', and empty string as default ('-').
+    Treats -3, -3.0, '-3', '-3.0', '不适用' as na_text ('不适用').
+    """
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return default
+    s = str(val).strip()
+    if s.endswith(".0"):
+        s = s[:-2]
+    if s in ("-3", "不适用", "not applicable"):
+        return na_text
+    if s in ("", "nan", "NaT", "None"):
+        return default
+    return s
+
+
 def safe_str(val, default=""):
     """Return clean string, treating NaN / None / 'nan' / 'NaT' as default."""
     if val is None or (isinstance(val, float) and pd.isna(val)):
