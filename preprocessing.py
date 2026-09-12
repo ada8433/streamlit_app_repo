@@ -98,12 +98,14 @@ def sanitize_special_and_missing_values(df: pd.DataFrame) -> pd.DataFrame:
         else:
             # String, object, categorical, and mixed text columns
             clean_df[col] = s.map(
-                lambda x: NOT_APPLICABLE_VALUE
-                if x in na_markers
-                else (
-                    ""
-                    if (pd.isna(x) or str(x).strip() in ("nan", "None", "NaT"))
-                    else x
+                lambda x: (
+                    NOT_APPLICABLE_VALUE
+                    if x in na_markers
+                    else (
+                        ""
+                        if (pd.isna(x) or str(x).strip() in ("nan", "None", "NaT"))
+                        else x
+                    )
                 )
             )
 
