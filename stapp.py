@@ -245,6 +245,7 @@ if "raw_df" in st.session_state:
         data=get_sidebar_excel_bytes(),
         file_name=f"updated_{st.session_state.get('_file_name', 'data.xlsx')}",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        type="primary",
         use_container_width=True,
     )
 
@@ -708,20 +709,16 @@ with st.form("edit_patient_form"):
             "回访治疗安排", value=safe_str(person.get("回访治疗安排"))
         )
 
-    btn_col1, btn_col2, btn_col3 = st.columns([1, 1, 2], vertical_alignment="center")
+    btn_col1, btn_col2 = st.columns([1, 3], vertical_alignment="center")
     with btn_col1:
         save_current = st.form_submit_button(
             "💾 保存当前修改", use_container_width=True
         )
     with btn_col2:
-        save_and_next = st.form_submit_button(
-            "⏭️ 保存并跳到下一位", use_container_width=True
-        )
-    with btn_col3:
         st.caption("💡 提示：点击保存后数据将写入当前会话；可随时下载最新 Excel 文件。")
 
 # ---- Save logic (runs on submit button click) ----
-if save_current or save_and_next:
+if save_current:
     raw_idx = int(person["_original_idx"])
     raw_df = st.session_state["raw_df"]
 
@@ -744,11 +741,6 @@ if save_current or save_and_next:
     st.cache_data.clear()
     st.session_state["_save_success"] = True
 
-    if save_and_next:
-        next_idx = (patient_idx + 1) % len(name_options)
-        st.session_state.dropdown_val = name_options[next_idx]
-        st.session_state.patient_idx = next_idx
-
     st.rerun()
 
 # Bottom Download button
@@ -766,4 +758,5 @@ if "raw_df" in st.session_state:
         file_name=f"updated_{st.session_state.get('_file_name', 'data.xlsx')}",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True,
+        type="primary",
     )
