@@ -257,10 +257,10 @@ if (
 col_prev, col_dropdown, col_next = st.columns([1, 4, 1], vertical_alignment="bottom")
 
 with col_prev:
-    st.button("◀️ 上一位", on_click=step_patient, args=(-1,))
+    st.button("◀️ 上一位", key="top_prev", on_click=step_patient, args=(-1,))
 
 with col_next:
-    st.button("▶️ 下一位", on_click=step_patient, args=(1,))
+    st.button("▶️ 下一位", key="top_next", on_click=step_patient, args=(1,))
 
 # 4. Pull the patient profile when actively selected from dropdown
 with col_dropdown:
@@ -730,15 +730,30 @@ if save_current:
 
     st.rerun()
 
-# Bottom Download button
-if "raw_df" in st.session_state:
-    _export_df = st.session_state["raw_df"]
+# Bottom Download button + Prev/Next navigation
+_export_df = st.session_state["raw_df"]
 
-    def get_bottom_excel_bytes() -> bytes:
-        buf = io.BytesIO()
-        _export_df.to_excel(buf, index=False, engine="openpyxl")
-        return buf.getvalue()
 
+def get_bottom_excel_bytes() -> bytes:
+    buf = io.BytesIO()
+    _export_df.to_excel(buf, index=False, engine="openpyxl")
+    return buf.getvalue()
+
+
+col_btm_prev, col_btm_dl, col_btm_next = st.columns(
+    [1, 2, 1], vertical_alignment="center"
+)
+
+with col_btm_prev:
+    st.button(
+        "◀️ 上一位",
+        key="btm_prev",
+        on_click=step_patient,
+        args=(-1,),
+        use_container_width=True,
+    )
+
+with col_btm_dl:
     st.download_button(
         label="📥 下载更新后的完整 Excel 文件",
         data=get_bottom_excel_bytes(),
@@ -746,4 +761,13 @@ if "raw_df" in st.session_state:
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True,
         type="primary",
+    )
+
+with col_btm_next:
+    st.button(
+        "▶️ 下一位",
+        key="btm_next",
+        on_click=step_patient,
+        args=(1,),
+        use_container_width=True,
     )
