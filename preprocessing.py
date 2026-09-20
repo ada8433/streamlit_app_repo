@@ -227,21 +227,17 @@ def map_categorical_choices(df: pd.DataFrame) -> pd.DataFrame:
             return NOT_APPLICABLE_VALUE
         return FAMILY_SUPPORT_MAP.get(s, s)
 
-    family_dict_records = []
-    for _, row in clean_df.iterrows():
-        rec = {}
-        for label, candidates in FAMILY_SUPPORT_ITEMS:
-            val = NOT_APPLICABLE_VALUE
-            for c in candidates:
-                if c in clean_df.columns:
-                    val = _map_fam_support(row[c])
-                    break
-            rec[label] = val
-        family_dict_records.append(rec)
+    for label, candidates in FAMILY_SUPPORT_ITEMS:
+        col = next((c for c in candidates if c in clean_df.columns), None)
+        if col:
+            clean_df[f"家庭支持_{label}"] = clean_df[col].apply(_map_fam_support)
+        else:
+            clean_df[f"家庭支持_{label}"] = NOT_APPLICABLE_VALUE
 
-    clean_df["family_support_dict"] = family_dict_records
-    for label, _ in FAMILY_SUPPORT_ITEMS:
-        clean_df[f"家庭支持_{label}"] = [d[label] for d in family_dict_records]
+    clean_df["family_support_dict"] = clean_df.apply(
+        lambda r: {label: r[f"家庭支持_{label}"] for label, _ in FAMILY_SUPPORT_ITEMS},
+        axis=1,
+    )
 
     return clean_df
 
@@ -476,7 +472,7 @@ def track_longitudinal_patient_history(df: pd.DataFrame) -> pd.DataFrame:
         clean_df["最新登记时间"] = clean_df.groupby(id_col)["提交答卷时间"].transform(
             "max"
         )
-
+        clean_df["最近备注"] = clean_df.groupby(id_col)["备注"].transform("max")
         # Check latest progress (support new and legacy column names)
         progress_col = (
             "回访治疗安排"
@@ -498,6 +494,7 @@ def track_longitudinal_patient_history(df: pd.DataFrame) -> pd.DataFrame:
         clean_df["总提交次数"] = 1
         clean_df["首次登记时间"] = clean_df.get("提交答卷时间")
         clean_df["最新登记时间"] = clean_df.get("提交答卷时间")
+        clean_df["最近备注"] = clean_df.get("备注")
         clean_df["当前治疗进展"] = "-"
 
     return clean_df
