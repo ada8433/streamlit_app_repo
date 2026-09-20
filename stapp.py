@@ -1,3 +1,4 @@
+import datetime
 import io
 import pandas as pd
 import streamlit as st
@@ -196,9 +197,9 @@ crisis_filter = st.sidebar.selectbox(
     key="filter_crisis",
 )
 if crisis_filter == "🚨 仅高危预警 (自伤/自杀/PHQ9项)":
-    filtered_df = filtered_df[filtered_df["has_crisis_risk"] == True]
+    filtered_df = filtered_df[filtered_df["has_crisis_risk"].astype(bool)]
 elif crisis_filter == "常规求诊者":
-    filtered_df = filtered_df[filtered_df["has_crisis_risk"] == False]
+    filtered_df = filtered_df[~filtered_df["has_crisis_risk"].astype(bool)]
 
 # 7. Filter By First Therapist (首访治疗师)
 all_therapists = sorted(
@@ -228,26 +229,6 @@ elif selected_therapist != "全部":
 
 # Filter result summary
 st.sidebar.markdown(f"**当前筛选结果**：`{len(filtered_df)}` / `{len(df)}` 位")
-
-# Sidebar Export Button
-st.sidebar.markdown("---")
-st.sidebar.markdown("#### 📥 档案导出")
-if "raw_df" in st.session_state:
-    _export_df = st.session_state["raw_df"]
-
-    def get_sidebar_excel_bytes() -> bytes:
-        buf = io.BytesIO()
-        _export_df.to_excel(buf, index=False, engine="openpyxl")
-        return buf.getvalue()
-
-    st.sidebar.download_button(
-        label="📥 下载更新后的文件",
-        data=get_sidebar_excel_bytes(),
-        file_name=f"updated_{st.session_state.get('_file_name', 'data.xlsx')}",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        type="primary",
-        use_container_width=True,
-    )
 
 if filtered_df.empty:
     st.warning("⚠️ 当前筛选条件下未找到求诊者记录，请调整或重置筛选条件。")
@@ -293,7 +274,11 @@ with col_dropdown:
 # Active record
 patient_idx = name_options.index(selected_label)
 person = filtered_df.iloc[patient_idx]
-pget = lambda col, default="-": format_value(person.get(col), default=default)
+
+
+def pget(col, default="-"):
+    return format_value(person.get(col), default=default)
+
 
 st.caption(f"当前第 **{patient_idx + 1}** / **{len(name_options)}** 位求诊者")
 
@@ -322,6 +307,7 @@ current_submission = int(person.get("提交次数", 1))
 first_entry_time = person.get("首次登记时间")
 last_entry_time = person.get("最新登记时间")
 current_progress = person.get("当前治疗进展", "-")
+last_note = person.get("最近备注", "-")
 
 # Format first entry date cleanly
 if pd.notna(first_entry_time):
@@ -332,11 +318,11 @@ else:
 if total_submissions > 1:
     st.info(
         f"📋 **多次登记提示**：该求诊者在数据库中共有 **{total_submissions}** 次提交记录（当前查看的是第 **{current_submission}** 次）。\n\n"
-        f"**初次登记时间**：`{first_entry_str}`\n\n"
-        f"**当前治疗进展**：`{current_progress}` （`{last_entry_time}`）"
+        f"**初次登记时间**：{first_entry_str}\n\n"
+        f"**当前治疗进展**：{current_progress}\n\n**最近备注：**{last_note}"
     )
 else:
-    st.info(f"**当前治疗进展**：`{current_progress}` （`{last_entry_time}`）")
+    st.info(f"**当前治疗进展**：{current_progress}\n\n**最近备注：**{last_note}")
 
 # Key Metrics
 main = st.container()
@@ -641,7 +627,6 @@ with tab5:
     goal_cols = [c for c in df.columns if "目标(" in c]
     selected_goals = person.get("treatment_goals_list")
     if not selected_goals:
-        goal_cols = [c for c in df.columns if "目标(" in c]
         selected_goals = [
             c.replace("目标(", "").replace(")", "")
             for c in goal_cols
@@ -709,6 +694,8 @@ with st.form("edit_patient_form"):
             "回访治疗安排", value=safe_str(person.get("回访治疗安排"))
         )
 
+    new_note = st.text_input("备注", value=safe_str(person.get("备注")))
+
     btn_col1, btn_col2 = st.columns([1, 3], vertical_alignment="center")
     with btn_col1:
         save_current = st.form_submit_button(
@@ -737,7 +724,7 @@ if save_current:
     )
     raw_df.at[raw_idx, "回访情况"] = new_followup_outcome
     raw_df.at[raw_idx, "回访治疗安排"] = new_followup_notes
-
+    raw_df.at[raw_idx, "备注"] = new_note
     st.cache_data.clear()
     st.session_state["_save_success"] = True
 
@@ -755,7 +742,7 @@ if "raw_df" in st.session_state:
     st.download_button(
         label="📥 下载更新后的完整 Excel 文件",
         data=get_bottom_excel_bytes(),
-        file_name=f"updated_{st.session_state.get('_file_name', 'data.xlsx')}",
+        file_name=f"{datetime.datetime.now(tz=datetime.timezone(datetime.timedelta(hours=8))).date().strftime('%Y%m%d')}_{st.session_state.get('_file_name', 'data.xlsx')}",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True,
         type="primary",
