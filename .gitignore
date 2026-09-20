@@ -6,3 +6,4 @@ mock.xlsx
 __pycache__/
 *.pyc
 
+~$mock.xlsx
