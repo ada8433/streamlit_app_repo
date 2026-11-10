@@ -1,24 +1,19 @@
 import datetime
 import io
+import re
+
 import pandas as pd
 import streamlit as st
 
 from mappings import (
     CONTACT_OUTCOMES,
-    DIAGNOSIS_FIELDS,
     FAMILY_SUPPORT_ITEMS,
-    GAD_FIELDS,
-    GAD_LABELS,
-    ISI_FIELDS,
-    ISI_LABELS,
-    PHQ_FIELDS,
-    PHQ_LABELS,
+    SCALES,
     TREATMENT_OPTIONS,
 )
-from preprocessing import load_raw_data, preprocess_data
+from preprocessing import find_scale_columns, load_raw_data, preprocess_data
 from utils import (
     format_value,
-    get_diagnoses,
     parse_date,
     parse_multi,
     phone_num_slicer,
@@ -32,19 +27,64 @@ st.set_page_config(page_title="门诊预约Dashboard", page_icon="📋", layout=
 
 
 # ---------------------------------------------------------
-# Navigation Callbacks
+# Navigation & Filter Helpers
 # ---------------------------------------------------------
 def step_patient(step: int):
     curr_idx = name_options.index(st.session_state.dropdown_val)
-    # Modulo (%) provides circular wrap-around:
-    # - At end (idx + 1 == len), wraps to 0 (first patient)
-    # - At start (0 - 1), wraps to len - 1 (last patient)
-    new_idx = (curr_idx + step) % len(name_options)
-    st.session_state.dropdown_val = name_options[new_idx]
+    # Modulo (%) provides circular wrap-around
+    st.session_state.dropdown_val = name_options[(curr_idx + step) % len(name_options)]
 
 
-def update_idx_from_dropdown():
-    st.session_state.patient_idx = name_options.index(st.session_state.dropdown_val)
+def _get_filter_options(
+    df: pd.DataFrame, col: str, order: list | None = None
+) -> list:
+    """Extract ordered unique options for a categorical filter column."""
+    if col not in df.columns:
+        return []
+    present = {v for v in df[col].dropna().unique() if safe_str(v)}
+    options = [m for m in order if m in present] if order else []
+    return options if options else sorted(present)
+
+
+def _sidebar_multiselect_filter(
+    df: pd.DataFrame,
+    filtered_df: pd.DataFrame,
+    col: str,
+    label: str,
+    key: str,
+    order: list | None = None,
+) -> pd.DataFrame:
+    """Render a sidebar multiselect filter for a categorical column and filter rows."""
+    if col not in filtered_df.columns:
+        return filtered_df
+    options = _get_filter_options(df, col, order)
+    selected = st.sidebar.multiselect(label, options=options, key=key)
+    return filtered_df[filtered_df[col].isin(selected)] if selected else filtered_df
+
+
+def init_or_reset_filters(df: pd.DataFrame, force: bool = False):
+    """Initialize or reset all filter blocks in session_state to their default values."""
+    has_dates = not df["提交答卷时间"].isna().all()
+    today = pd.to_datetime("today").date()
+    min_date = df["提交答卷时间"].min().date() if has_dates else today
+    max_date = df["提交答卷时间"].max().date() if has_dates else today
+
+    defaults = {
+        "filter_date_range": (min_date, max_date),
+        "filter_treatments": _get_filter_options(
+            df, "请选择您需要预约登记的治疗方式"
+        ),
+        "filter_sex": _get_filter_options(df, "性别"),
+        "filter_rec": [],
+        "filter_marriage": _get_filter_options(
+            df, "婚姻状态", order=["单身", "未婚", "已婚", "离婚", "丧偶"]
+        ),
+        "filter_crisis": "全部求诊者",
+        "filter_therapist": "全部",
+    }
+    for k, val in defaults.items():
+        if force or k not in st.session_state:
+            st.session_state[k] = val
 
 
 # ---------------------------------------------------------
@@ -57,14 +97,18 @@ if not uploaded_file:
     st.stop()
 
 # Store raw data in session state for the edit-and-save workflow
-if (
+new_file_loaded = (
     "raw_df" not in st.session_state
     or st.session_state.get("_file_name") != uploaded_file.name
-):
+)
+if new_file_loaded:
     st.session_state["raw_df"] = load_raw_data(uploaded_file)
     st.session_state["_file_name"] = uploaded_file.name
 
 df = preprocess_data(st.session_state["raw_df"])
+
+# Initialize filter defaults in session_state (force reset if brand-new file uploaded)
+init_or_reset_filters(df, force=new_file_loaded)
 
 # ------------ Sidebar filters -------------
 st.sidebar.header("🔍 档案检索与筛选")
@@ -79,121 +123,70 @@ st.sidebar.caption(
 
 # 0. Quick Reset Button
 if st.sidebar.button("🔄 重置所有筛选", use_container_width=True):
-    for k in [
-        "filter_date_range",
-        "filter_treatments",
-        "filter_sex",
-        "filter_rec",
-        "filter_marriage",
-        "filter_crisis",
-        "filter_therapist",
-    ]:
-        st.session_state.pop(k, None)
+    init_or_reset_filters(df, force=True)
     st.rerun()
 
 # 1. Filter By Date
-df["提交答卷时间"] = pd.to_datetime(df["提交答卷时间"])
-min_date = (
-    df["提交答卷时间"].min().date()
-    if not df["提交答卷时间"].isna().all()
-    else pd.to_datetime("today").date()
-)
-max_date = (
-    df["提交答卷时间"].max().date()
-    if not df["提交答卷时间"].isna().all()
-    else pd.to_datetime("today").date()
-)
 date_range = st.sidebar.date_input(
     "📅 登记日期范围",
-    value=(min_date, max_date),
     key="filter_date_range",
 )
 
-if len(date_range) == 2:
+if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
     start_date, end_date = date_range
-    filtered_df = df[
-        (df["提交答卷时间"].dt.date >= start_date)
-        & (df["提交答卷时间"].dt.date <= end_date)
-    ]
+    filtered_df = df[df["提交答卷时间"].dt.date.between(start_date, end_date)]
 else:
     filtered_df = df
 
 # 2. Filter By Treatment Type (预约治疗方式)
-treatment_col = "请选择您需要预约登记的治疗方式"
-if treatment_col in filtered_df.columns:
-    all_treatments = sorted(
-        [t for t in df[treatment_col].dropna().unique().tolist() if str(t).strip()]
-    )
-    selected_treatments = st.sidebar.multiselect(
-        "🛋️ 预约治疗方式",
-        options=all_treatments,
-        default=all_treatments,
-        key="filter_treatments",
-    )
-    if selected_treatments:
-        filtered_df = filtered_df[filtered_df[treatment_col].isin(selected_treatments)]
+filtered_df = _sidebar_multiselect_filter(
+    df,
+    filtered_df,
+    col="请选择您需要预约登记的治疗方式",
+    label="🛋️ 预约治疗方式",
+    key="filter_treatments",
+)
 
 # 3. Filter By Sex (性别)
-sex_col = "性别"
-if sex_col in filtered_df.columns:
-    all_sex = sorted(
-        [s for s in df[sex_col].dropna().unique().tolist() if str(s).strip()]
-    )
-    selected_sex = st.sidebar.multiselect(
-        "💁 性别",
-        options=all_sex,
-        default=all_sex,
-        key="filter_sex",
-    )
-    if selected_sex:
-        filtered_df = filtered_df[filtered_df[sex_col].isin(selected_sex)]
+filtered_df = _sidebar_multiselect_filter(
+    df,
+    filtered_df,
+    col="性别",
+    label="💁 性别",
+    key="filter_sex",
+)
 
 # 4. Filter By Treatment Recommendation (治疗推荐)
-rec_options = ["未推荐/待定"] + TREATMENT_OPTIONS
 selected_recs = st.sidebar.multiselect(
     "🏷️ 治疗推荐",
-    options=rec_options,
-    default=[],
+    options=["未推荐/待定"] + TREATMENT_OPTIONS,
     key="filter_rec",
     help="留空代表不过滤；可多选，匹配推荐内容中包含任一项的记录",
 )
 if selected_recs:
-
-    def _match_rec(val):
-        val_str = str(val).strip() if pd.notna(val) else ""
-        is_empty = val_str in ("", "-", "nan", "None", "不适用")
-        if "未推荐/待定" in selected_recs and is_empty:
-            return True
-        for target in selected_recs:
-            if target != "未推荐/待定" and target in val_str:
-                return True
-        return False
-
-    filtered_df = filtered_df[filtered_df["治疗推荐"].apply(_match_rec)]
+    rec_s = filtered_df["治疗推荐"].fillna("").astype(str).str.strip()
+    mask = pd.Series(False, index=filtered_df.index)
+    if "未推荐/待定" in selected_recs:
+        mask |= rec_s.isin(["", "-", "不适用"])
+    targets = [re.escape(t) for t in selected_recs if t != "未推荐/待定"]
+    if targets:
+        mask |= rec_s.str.contains("|".join(targets), regex=True)
+    filtered_df = filtered_df[mask]
 
 # 5. Filter By Marriage Status (婚姻情况)
-marriage_col = "婚姻状态"
-if marriage_col in filtered_df.columns:
-    marriage_order = ["单身", "未婚", "已婚", "离婚", "丧偶"]
-    all_marriage = [m for m in marriage_order if m in df[marriage_col].dropna().values]
-    if not all_marriage:
-        all_marriage = sorted(
-            [m for m in df[marriage_col].dropna().unique().tolist() if str(m).strip()]
-        )
-    selected_marriage = st.sidebar.multiselect(
-        "💍 婚姻情况",
-        options=all_marriage,
-        default=all_marriage,
-        key="filter_marriage",
-    )
-    if selected_marriage:
-        filtered_df = filtered_df[filtered_df[marriage_col].isin(selected_marriage)]
+filtered_df = _sidebar_multiselect_filter(
+    df,
+    filtered_df,
+    col="婚姻状态",
+    label="💍 婚姻情况",
+    key="filter_marriage",
+    order=["单身", "未婚", "已婚", "离婚", "丧偶"],
+)
 
 # 6. Filter By Crisis Risk (危机预警)
 crisis_filter = st.sidebar.selectbox(
     "🚨 危机预警筛选",
     options=["全部求诊者", "🚨 仅高危预警 (自伤/自杀/PHQ9项)", "常规求诊者"],
-    index=0,
     key="filter_crisis",
 )
 if crisis_filter == "🚨 仅高危预警 (自伤/自杀/PHQ9项)":
@@ -202,18 +195,11 @@ elif crisis_filter == "常规求诊者":
     filtered_df = filtered_df[~filtered_df["has_crisis_risk"].astype(bool)]
 
 # 7. Filter By First Therapist (首访治疗师)
-all_therapists = sorted(
-    [
-        t
-        for t in df["首访治疗师"].dropna().unique().tolist()
-        if str(t).strip() not in ("", "-", "nan", "None")
-    ]
-)
-therapist_options = ["全部"] + all_therapists + ["未分配"]
+therapist_s = df["首访治疗师"].fillna("").astype(str).str.strip()
+all_therapists = sorted(t for t in therapist_s.unique() if t not in ("", "-", "不适用"))
 selected_therapist = st.sidebar.selectbox(
     "👨‍⚕️ 首访治疗师",
-    options=therapist_options,
-    index=0,
+    options=["全部"] + all_therapists + ["未分配"],
     key="filter_therapist",
 )
 if selected_therapist == "未分配":
@@ -222,7 +208,7 @@ if selected_therapist == "未分配":
         .fillna("")
         .astype(str)
         .str.strip()
-        .isin(["", "-", "nan", "None"])
+        .isin(["", "-", "不适用"])
     ]
 elif selected_therapist != "全部":
     filtered_df = filtered_df[filtered_df["首访治疗师"] == selected_therapist]
@@ -235,25 +221,15 @@ if filtered_df.empty:
     st.stop()
 
 
-# ---- Patient Search & Prev/Next buttons----
-# 1. Construct search box options
-filtered_df["_label"] = (
-    filtered_df["姓名（实名）"].fillna("未知").astype(str)
-    + " ("
-    + filtered_df["提交答卷时间"].dt.strftime("%Y-%m-%d %H:%M").fillna("-")
-    + ")"
-)
+# ---- Patient Search & Prev/Next buttons ----
 name_options = filtered_df["_label"].tolist()
 
-# 2. Initialize current patient index in session_state &
-# ensure index stays within bounds if the filtered list shrinks
 if (
     "dropdown_val" not in st.session_state
     or st.session_state.dropdown_val not in name_options
 ):
     st.session_state.dropdown_val = name_options[0]
 
-# 3. Previous / Next Buttons Layout
 col_prev, col_dropdown, col_next = st.columns([1, 4, 1], vertical_alignment="bottom")
 
 with col_prev:
@@ -262,13 +238,11 @@ with col_prev:
 with col_next:
     st.button("▶️ 下一位", key="top_next", on_click=step_patient, args=(1,))
 
-# 4. Pull the patient profile when actively selected from dropdown
 with col_dropdown:
     selected_label = st.selectbox(
         "🔍 选择/输入求诊者姓名（预约提交时间）",
         options=name_options,
         key="dropdown_val",
-        on_change=update_idx_from_dropdown,
     )
 
 # Active record
@@ -282,7 +256,6 @@ def pget(col, default="-"):
 
 st.caption(f"当前第 **{patient_idx + 1}** / **{len(name_options)}** 位求诊者")
 
-# Show save success feedback
 if st.session_state.pop("_save_success", False):
     st.toast("✅ 评估登记已成功保存！", icon="💾")
 
@@ -305,84 +278,45 @@ st.title(
 total_submissions = int(person.get("总提交次数", 1))
 current_submission = int(person.get("提交次数", 1))
 first_entry_time = person.get("首次登记时间")
-last_entry_time = person.get("最新登记时间")
 current_progress = person.get("当前治疗进展", "-")
 last_note = person.get("最近备注", "-")
 
-# Format first entry date cleanly
-if pd.notna(first_entry_time):
-    first_entry_str = pd.to_datetime(first_entry_time).strftime("%Y-%m-%d %H:%M")
-else:
-    first_entry_str = "未知"
+first_entry_str = (
+    pd.to_datetime(first_entry_time).strftime("%Y-%m-%d %H:%M")
+    if pd.notna(first_entry_time)
+    else "未知"
+)
 
 if total_submissions > 1:
-    st.info(
+    st.warning(
         f"📋 **多次登记提示**：该求诊者在数据库中共有 **{total_submissions}** 次提交记录（当前查看的是第 **{current_submission}** 次）。\n\n"
         f"**初次登记时间**：{first_entry_str}\n\n"
-        f"**当前治疗进展**：{current_progress}\n\n**最近备注：**{last_note}"
     )
-else:
-    st.info(f"**当前治疗进展**：{current_progress}\n\n**最近备注：**{last_note}")
+
+st.info(f"**当前治疗进展**：{current_progress}\n\n**最近备注**：{last_note}")
 
 # Key Metrics
 main = st.container()
 
 # Diagnosis badges
 diagnoses_list = person.get("diagnoses_list", [])
-if not diagnoses_list:
-    diagnosis_cols = df.columns[DIAGNOSIS_FIELDS[0] : DIAGNOSIS_FIELDS[1]]
-    diagnoses_list = get_diagnoses(diagnosis_cols, person)
-
-display = ""
-for d in diagnoses_list:
-    display += f":red-badge[{d}] "
-main.write(f"{display}")
+main.write(" ".join(f":red-badge[{d}]" for d in diagnoses_list))
 
 # Scale Metrics
-m1, m2, m3 = main.columns(3)
-
-phq_severity = person.get("PHQ_Severity", "")
-phq_label = (
-    f"抑郁筛查量表 (PHQ-9) · {phq_severity}" if phq_severity else "抑郁筛查量表 (PHQ-9)"
-)
-m1.metric(
-    label=phq_label,
-    value=f"{int(person['PHQ_Total'])} / 27",
-)
-
-gad_severity = person.get("GAD_Severity", "")
-gad_label = (
-    f"广泛性焦虑量表 (GAD-7) · {gad_severity}"
-    if gad_severity
-    else "广泛性焦虑量表 (GAD-7)"
-)
-m2.metric(
-    label=gad_label,
-    value=f"{int(person['GAD_Total'])} / 21",
-)
-
-isi_severity = person.get("ISI_Severity", "")
-isi_label = (
-    f"失眠严重程度量表 (ISI) · {isi_severity}"
-    if isi_severity
-    else "失眠严重程度量表 (ISI)"
-)
-m3.metric(label=isi_label, value=f"{int(person['ISI_TOTAL'])} / 28")
+for col_ui, scale in zip(main.columns(3), SCALES):
+    sev = person.get(scale["severity_col"], "")
+    max_total = scale["max_item"] * len(scale["labels"])
+    col_ui.metric(
+        label=f"{scale['title']} · {sev}" if sev else scale["title"],
+        value=f"{int(person[scale['total_col']])} / {max_total}",
+    )
 
 # Risk indicators (Self-harm / Suicide)
 active_risks = person.get("crisis_risk_flags", [])
-if not active_risks:
-    risk_cols = [c for c in df.columns if "25(" in c]
-    active_risks = [
-        c.replace("25(", "").replace(")", "")
-        for c in risk_cols
-        if person.get(c) == 1 or person.get(c) == "是"
-    ]
-
 if active_risks:
     main.error(f"⚠️ 风险预警指标: {', '.join(active_risks)}")
 
-# Organize 112 columns into Tabs
+# Organize columns into Tabs
 tab1, tab2, tab3, tab4, tab5 = main.tabs(
     [
         "1. 基本信息与联络",
@@ -416,8 +350,9 @@ with tab1:
             f"**婚姻/生育状态**：{pget('婚姻状态')}, {pget('生育状态')} (孩子数: {pget('孩子个数')})"
         )
         cohabitants = person.get("cohabitants_list", [])
-        cohabitants_str = "、".join(cohabitants) if cohabitants else "未明确记录"
-        st.write(f"**主要同居者**：{cohabitants_str}")
+        st.write(
+            f"**主要同居者**：{'、'.join(cohabitants) if cohabitants else '未明确记录'}"
+        )
         st.write(f"**饲养宠物**：{pget('是否饲养宠物')}")
 
     with col3:
@@ -448,21 +383,7 @@ with tab2:
         st.write(f"**药物名称/时间/剂量**：{pget('服用药物名称，服用时间，剂量')}")
         st.write(f"**未服药情况**：{pget('未服药情况')}")
 
-        # Symptoms list
-        symptoms_cols = [c for c in df.columns if "19(" in c]
-        present_symptoms = [
-            c.replace("19(", "").replace(")", "")
-            for c in symptoms_cols
-            if person.get(c) == 1 or person.get(c) == "是"
-        ]
-        present_symptoms = person.get("diagnoses_list")
-        if not present_symptoms:
-            symptoms_cols = [c for c in df.columns if "19(" in c]
-            present_symptoms = [
-                c.replace("19(", "").replace(")", "")
-                for c in symptoms_cols
-                if person.get(c) == 1 or person.get(c) == "是"
-            ]
+        present_symptoms = person.get("diagnoses_list", [])
         st.write(
             f"**当前主诉/症状**：{', '.join(present_symptoms) if present_symptoms else '无特异记录'}"
         )
@@ -471,67 +392,61 @@ with tab2:
 # TAB 3: Scales (PHQ-9, GAD-7, ISI)
 # ---------------------------------------------------------
 with tab3:
-    phq_cols = (
-        df.columns[PHQ_FIELDS[0] : PHQ_FIELDS[1]]
-        if len(df.columns) >= PHQ_FIELDS[1]
-        else []
-    )
-    gad_cols = (
-        df.columns[GAD_FIELDS[0] : GAD_FIELDS[1]]
-        if len(df.columns) >= GAD_FIELDS[1]
-        else []
-    )
-    isi_cols = (
-        df.columns[ISI_FIELDS[0] : ISI_FIELDS[1]]
-        if len(df.columns) >= ISI_FIELDS[1]
-        else []
-    )
+    scale_by_key = {s["key"]: s for s in SCALES}
 
-    # Use pre-computed item scores from pipeline
-    phq_scores = [int(person.get(f"_phq_score_{i}", 0)) for i in range(len(PHQ_LABELS))]
-    gad_scores = [int(person.get(f"_gad_score_{i}", 0)) for i in range(len(GAD_LABELS))]
-    isi_scores = [int(person.get(f"_isi_score_{i}", 0)) for i in range(len(ISI_LABELS))]
+    def _get_scale_scores(scale: dict) -> list[int]:
+        return [
+            int(person.get(f"_{scale['key']}_score_{i}", 0))
+            for i in range(len(scale["labels"]))
+        ]
+
+    def _render_scale_summary(scale: dict, show_score: bool = False):
+        cols = find_scale_columns(df.columns, scale)
+        sev = person.get(scale["severity_col"], "")
+        sev_str = f" ({sev})" if sev else ""
+        short_name = scale["name"].split("-")[0]
+        st.write(
+            f"#### {short_name}总分：{person.get(scale['total_col'], '-')}{sev_str}"
+        )
+        st.markdown(f"#### {scale['name']} 项目摘要")
+        for idx, lbl in enumerate(scale["labels"]):
+            col_name = cols[idx] if idx < len(cols) and cols[idx] else lbl
+            item_label = (
+                str(col_name).split("—")[-1]
+                if not show_score and idx < len(cols) and cols[idx]
+                else lbl
+            )
+            val_text = format_value(person.get(col_name, "-"))
+            if show_score:
+                score_val = person.get(f"_{scale['key']}_score_{idx}", 0)
+                st.write(f"• **{item_label}**: {val_text} `({score_val}分)`")
+            else:
+                st.write(f"• **{item_label}**: {val_text}")
 
     st.markdown("### 📝 抑郁与焦虑自评（PHQ-9 & GAD-7）")
-    c1, c2 = st.columns(2, gap="medium", border=True)
-    with c1:
-        plot_scale_breakdown(
-            PHQ_LABELS, phq_scores, max_score=3, title="PHQ-9 抑郁症状条目得分"
-        )
-        phq_sev = person.get("PHQ_Severity", "")
-        phq_sev_str = f" ({phq_sev})" if phq_sev else ""
-        st.write(f"#### PHQ总分：{person.get('PHQ_Total', '-')}{phq_sev_str}")
-        st.markdown("#### PHQ-9 项目摘要")
-        for c in phq_cols[:9]:
-            st.write(f"• **{c.split('—')[-1]}**: {format_value(person.get(c, '-'))}")
-
-    with c2:
-        plot_scale_breakdown(
-            GAD_LABELS, gad_scores, max_score=3, title="GAD-7 焦虑症状条目得分"
-        )
-        gad_sev = person.get("GAD_Severity", "")
-        gad_sev_str = f" ({gad_sev})" if gad_sev else ""
-        st.write(f"#### GAD总分：{person.get('GAD_Total', '-')}{gad_sev_str}")
-        st.markdown("#### GAD-7 项目摘要")
-        for c in gad_cols[:7]:
-            st.write(f"• **{c.split('—')[-1]}**: {format_value(person.get(c, '-'))}")
+    for col_ui, key in zip(st.columns(2, gap="medium", border=True), ("phq", "gad")):
+        sc = scale_by_key[key]
+        with col_ui:
+            plot_scale_breakdown(
+                sc["labels"],
+                _get_scale_scores(sc),
+                max_score=sc["max_item"],
+                title=sc["chart_title"],
+            )
+            _render_scale_summary(sc)
 
     st.markdown("### 💤 失眠严重程度自评（ISI）")
+    isi_sc = scale_by_key["isi"]
     c3, c4 = st.columns(2, gap="medium", border=True)
     with c3:
         plot_scale_breakdown(
-            ISI_LABELS, isi_scores, max_score=4, title="ISI 失眠症状条目得分 (0-4)"
+            isi_sc["labels"],
+            _get_scale_scores(isi_sc),
+            max_score=isi_sc["max_item"],
+            title=isi_sc["chart_title"],
         )
     with c4:
-        isi_sev = person.get("ISI_Severity", "")
-        isi_sev_str = f" ({isi_sev})" if isi_sev else ""
-        st.write(f"#### ISI总分：{person.get('ISI_TOTAL', '-')}{isi_sev_str}")
-        st.markdown("#### ISI 项目摘要")
-        for idx, lbl in enumerate(ISI_LABELS):
-            col_name = isi_cols[idx] if idx < len(isi_cols) else lbl
-            val_text = format_value(person.get(col_name, "-"))
-            score_text = person.get(f"_isi_score_{idx}", 0)
-            st.write(f"• **{lbl}**: {val_text} `({score_text}分)`")
+        _render_scale_summary(isi_sc, show_score=True)
 
 # ---------------------------------------------------------
 # TAB 4: Social Support Network (SSRS & Ecological Context)
@@ -546,8 +461,9 @@ with tab4:
             st.markdown("#### 🏠 居住环境与同居生态")
             st.write(f"**近一年居住情况**：{pget('近一年来您：（只选一项）')}")
             cohabitants = person.get("cohabitants_list", [])
-            cohabitants_str = "、".join(cohabitants) if cohabitants else "无/未明确记录"
-            st.write(f"**主要同居者**：{cohabitants_str}")
+            st.write(
+                f"**主要同居者**：{'、'.join(cohabitants) if cohabitants else '无/未明确记录'}"
+            )
             st.write(f"**饲养宠物**：{pget('是否饲养宠物')}")
 
     with sec2:
@@ -562,8 +478,7 @@ with tab4:
     # Row 2: Family Support Matrix (Q37)
     with st.container(border=True):
         st.markdown("#### 👨‍👩‍👧‍👦 家庭成员支持矩阵 (SSRS Q37)")
-        f_cols = st.columns(5)
-        fam_dict = person.get("family_support_dict", {})
+        f_cols = st.columns(len(FAMILY_SUPPORT_ITEMS))
         badge_styles = {
             "全力支持": "green-badge",
             "一般": "blue-badge",
@@ -572,11 +487,9 @@ with tab4:
             "不适用": "gray-badge",
             "-": "gray-badge",
         }
-        for idx, (label, _) in enumerate(FAMILY_SUPPORT_ITEMS):
-            with f_cols[idx]:
-                val = fam_dict.get(label, person.get(f"家庭支持_{label}", "-"))
-                if not val or val in ("nan", "None", ""):
-                    val = "-"
+        for col_ui, (label, _) in zip(f_cols, FAMILY_SUPPORT_ITEMS):
+            with col_ui:
+                val = format_value(person.get(f"家庭支持_{label}"))
                 badge_type = badge_styles.get(val, "blue-badge")
                 st.markdown(f"**{label}**")
                 st.markdown(f":{badge_type}[{val}]")
@@ -608,30 +521,21 @@ with tab4:
             has_subj = pget("过去，在您遇到急难情况时，曾经得到的安慰和关心的来源有：")
 
             st.write(f"**经济/实际帮助来源**：`{has_obj}`")
-            if obj_support:
-                st.write(f"• 渠道：{'、'.join(obj_support)}")
-            else:
-                st.write("• 渠道：无具体登记渠道")
+            st.write(
+                f"• 渠道：{'、'.join(obj_support) if obj_support else '无具体登记渠道'}"
+            )
 
             st.write(f"**安慰/情感关心来源**：`{has_subj}`")
-            if subj_support:
-                st.write(f"• 渠道：{'、'.join(subj_support)}")
-            else:
-                st.write("• 渠道：无具体登记渠道")
+            st.write(
+                f"• 渠道：{'、'.join(subj_support) if subj_support else '无具体登记渠道'}"
+            )
 
 # ---------------------------------------------------------
 # TAB 5: Treatment Goals & Preferences
 # ---------------------------------------------------------
 with tab5:
     st.markdown("### 🎯 治疗目标与诉求")
-    goal_cols = [c for c in df.columns if "目标(" in c]
-    selected_goals = person.get("treatment_goals_list")
-    if not selected_goals:
-        selected_goals = [
-            c.replace("目标(", "").replace(")", "")
-            for c in goal_cols
-            if person.get(c) == 1
-        ]
+    selected_goals = person.get("treatment_goals_list", [])
 
     st.write(
         f"**心理治疗目标**：{' | '.join(selected_goals) if selected_goals else '未明确选定'}"
@@ -708,26 +612,21 @@ with st.form("edit_patient_form"):
 if save_current:
     raw_idx = int(person["_original_idx"])
     raw_df = st.session_state["raw_df"]
-
-    raw_df.at[raw_idx, "首访治疗师"] = new_first_therapist
-    raw_df.at[raw_idx, "首访时间"] = (
-        str(new_first_date) if new_first_date is not None else ""
-    )
-    raw_df.at[raw_idx, "首访情况"] = new_first_outcome
-    raw_df.at[raw_idx, "治疗推荐"] = (
-        ", ".join(new_treatment_rec) if new_treatment_rec else ""
-    )
-    raw_df.at[raw_idx, "未推荐说明"] = new_no_rec_reason
-    raw_df.at[raw_idx, "回访治疗师"] = new_followup_therapist
-    raw_df.at[raw_idx, "回访时间"] = (
-        str(new_followup_date) if new_followup_date is not None else ""
-    )
-    raw_df.at[raw_idx, "回访情况"] = new_followup_outcome
-    raw_df.at[raw_idx, "回访治疗安排"] = new_followup_notes
-    raw_df.at[raw_idx, "备注"] = new_note
-    st.cache_data.clear()
+    updates = {
+        "首访治疗师": new_first_therapist,
+        "首访时间": str(new_first_date) if new_first_date is not None else "",
+        "首访情况": new_first_outcome,
+        "治疗推荐": ", ".join(new_treatment_rec) if new_treatment_rec else "",
+        "未推荐说明": new_no_rec_reason,
+        "回访治疗师": new_followup_therapist,
+        "回访时间": str(new_followup_date) if new_followup_date is not None else "",
+        "回访情况": new_followup_outcome,
+        "回访治疗安排": new_followup_notes,
+        "备注": new_note,
+    }
+    for col, val in updates.items():
+        raw_df.at[raw_idx, col] = val
     st.session_state["_save_success"] = True
-
     st.rerun()
 
 # Bottom Download button + Prev/Next navigation
@@ -756,7 +655,8 @@ with col_btm_prev:
 with col_btm_dl:
     st.download_button(
         label="📥 下载更新后的完整 Excel 文件",
-        data=get_bottom_excel_bytes(),
+        data=get_bottom_excel_bytes,
+        on_click="ignore",
         file_name=f"{datetime.datetime.now(tz=datetime.timezone(datetime.timedelta(hours=8))).date().strftime('%Y%m%d')}_{st.session_state.get('_file_name', 'data.xlsx')}",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True,

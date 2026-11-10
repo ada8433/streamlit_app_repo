@@ -4,11 +4,13 @@ test_pipeline.py - Automated verification tests for the clinical data cleaning p
 
 import os
 import sys
+
 import pandas as pd
 
 from mappings import (
     ALL_ADMIN_COLS,
     EDITABLE_COLS,
+    FAMILY_SUPPORT_ITEMS,
     GAD_LABELS,
     ISI_LABELS,
     NOT_APPLICABLE_VALUE,
@@ -52,12 +54,13 @@ def run_tests():
     assert "总提交次数" in clean_df.columns, "总提交次数 missing!"
     assert "has_crisis_risk" in clean_df.columns, "has_crisis_risk missing!"
 
-    # Verify derived multiselect list columns
+    # Verify derived multiselect list columns & family support columns
     assert "diagnoses_list" in clean_df.columns, "diagnoses_list missing!"
     assert "crisis_risks_list" in clean_df.columns, "crisis_risks_list missing!"
     assert "treatment_goals_list" in clean_df.columns, "treatment_goals_list missing!"
     assert "cohabitants_list" in clean_df.columns, "cohabitants_list missing!"
-    assert "family_support_dict" in clean_df.columns, "family_support_dict missing!"
+    for label, _ in FAMILY_SUPPORT_ITEMS:
+        assert f"家庭支持_{label}" in clean_df.columns, f"家庭支持_{label} missing!"
 
     row0 = clean_df.iloc[0]
     print("=== Sample Cleaned Record ===")
@@ -72,12 +75,9 @@ def run_tests():
     print("Crisis Flags:", row0.get("crisis_risk_flags"))
     print("Treatment Goals:", row0.get("treatment_goals_list"))
     print("Cohabitants:", row0.get("cohabitants_list"))
-    print("Family Support Dict:", row0.get("family_support_dict"))
-    assert isinstance(row0.get("family_support_dict"), dict), (
-        "family_support_dict should be dict!"
-    )
-    assert "夫妻（恋人）" in row0.get("family_support_dict"), (
-        "Missing 夫妻（恋人） in family_support_dict!"
+    print(
+        "Family Support:",
+        {label: row0.get(f"家庭支持_{label}") for label, _ in FAMILY_SUPPORT_ITEMS},
     )
 
     # Verify scale score columns
