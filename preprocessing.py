@@ -1,40 +1,42 @@
 """
 preprocessing.py - Data ingestion, cleaning, scale scoring, and preprocessing pipeline.
 All internal variables, intermediate DataFrames, and functions use standard English naming.
+
+Caching layout
+--------------
+preprocess_data(raw_df)                 attaches editable admin columns + computes longitudinal history
+  └─ _cached_survey_pipeline(survey_df) @st.cache_data; receives survey answers WITHOUT administrative
+                                        columns, so saving an edit never re-runs cleaning / scoring
+                                        and only one DataFrame is stored in Streamlit's cache.
+
+Every stage mutates the frame it receives; `run_survey_pipeline` makes the single defensive copy.
 """
 
 import re
-from typing import List, Optional
+from typing import List, Optional, Sequence
+
+import numpy as np
 import pandas as pd
 import streamlit as st
 
 from mappings import (
-    ALL_ADMIN_COLS,
     CHOICE_MAPS,
-    COHABITANT_PREFIX,
-    CONTACT_OUTCOMES,
-    DIAGNOSIS_PREFIX,
     EDITABLE_COLS,
     FAMILY_SUPPORT_ITEMS,
     FAMILY_SUPPORT_MAP,
-    GAD_FIELDS,
-    GAD_ITEM_PATTERNS,
-    GAD_LABELS,
-    GOAL_PREFIX,
-    ISI_FIELDS,
-    ISI_ITEM_PATTERNS,
-    ISI_LABELS,
+    MULTISELECT_GROUPS,
     NOT_APPLICABLE_VALUE,
-    OBJECTIVE_SUPPORT_PREFIX,
-    PHQ_FIELDS,
-    PHQ_ITEM_PATTERNS,
-    PHQ_LABELS,
-    RISK_PREFIX,
-    SUBJECTIVE_SUPPORT_PREFIX,
+    SCALES,
     WORKING_COMPAT_COLS,
     YES_NO_FIELDS,
     YES_NO_MAP,
 )
+from utils import NA_STRS, NULL_STRS
+
+ADMIN_STR_COLS = EDITABLE_COLS + WORKING_COMPAT_COLS
+CRISIS_TERMS = frozenset({"自伤意念", "自伤行为", "自杀意念", "自杀想法"})
+# Checkbox "selected" markers (1 also matches 1.0 / True under isin)
+_CHECKED = [1, "1", "1.0", "是"]
 
 
 def load_raw_data(file_obj) -> pd.DataFrame:
@@ -43,34 +45,50 @@ def load_raw_data(file_obj) -> pd.DataFrame:
     and compatibility working columns exist with string dtype.
     """
     file_obj.seek(0)
-    if hasattr(file_obj, "name") and file_obj.name.endswith(".csv"):
+    if getattr(file_obj, "name", "").endswith(".csv"):
         raw_df = pd.read_csv(file_obj)
     else:
         raw_df = pd.read_excel(file_obj)
-
-    # Ensure all administrative columns exist
-    for col in ALL_ADMIN_COLS:
-        if col not in raw_df.columns:
-            raw_df[col] = ""
-
-    # Force string dtype on editable columns
-    raw_df[EDITABLE_COLS] = raw_df[EDITABLE_COLS].fillna("").astype(str)
-    raw_df[WORKING_COMPAT_COLS] = raw_df[WORKING_COMPAT_COLS].fillna("").astype(str)
-    return raw_df
+    return ensure_administrative_columns(raw_df)
 
 
 # ---------------------------------------------------------
-# Pipeline Stage 1: Administrative Columns & Index Preservation
+# Pipeline Stage 1: Administrative Columns
 # ---------------------------------------------------------
 def ensure_administrative_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Ensure editable and working compatibility columns are properly initialized."""
-    clean_df = df.copy()
-    for col in ALL_ADMIN_COLS:
-        if col not in clean_df.columns:
-            clean_df[col] = ""
-    clean_df[EDITABLE_COLS] = clean_df[EDITABLE_COLS].fillna("").astype(str)
-    clean_df[WORKING_COMPAT_COLS] = clean_df[WORKING_COMPAT_COLS].fillna("").astype(str)
-    return clean_df
+    """
+    Ensure editable and working compatibility columns exist as strings.
+    String dtype matters: saving text into an all-NaN (float) column would
+    otherwise raise a dtype warning (an error in pandas 3).
+    """
+    for col in ADMIN_STR_COLS:
+        if col not in df.columns:
+            df[col] = ""
+    df[ADMIN_STR_COLS] = df[ADMIN_STR_COLS].fillna("").astype(str)
+    return df
+
+
+# ---------------------------------------------------------
+# Vectorised cell helpers (Series-level versions of utils.safe_str / format_value)
+# ---------------------------------------------------------
+def _clean_text(s: pd.Series) -> pd.Series:
+    """Stripped strings; missing -> '', jump codes (-3, '-3.0', ...) -> NOT_APPLICABLE_VALUE."""
+    txt = s.astype(str).str.strip()
+    txt = txt.where(s.notna() & ~txt.isin(NULL_STRS), "")
+    return txt.mask(txt.str.removesuffix(".0").isin(NA_STRS), NOT_APPLICABLE_VALUE)
+
+
+def _map_codes(s: pd.Series, mapping: dict) -> pd.Series:
+    """Map option codes to labels ('2', 2 and 2.0 all hit key '2'); unknown values pass through."""
+    key = _clean_text(s).str.removesuffix(".0")
+    return key.map(mapping).fillna(key)
+
+
+def _nonblank(df: pd.DataFrame, col: str) -> pd.Series:
+    """Column with '' turned into NaN (all-NaN if the column is missing)."""
+    if col not in df.columns:
+        return pd.Series(np.nan, index=df.index, dtype=object)
+    return df[col].replace("", np.nan)
 
 
 # ---------------------------------------------------------
@@ -79,36 +97,20 @@ def ensure_administrative_columns(df: pd.DataFrame) -> pd.DataFrame:
 def sanitize_special_and_missing_values(df: pd.DataFrame) -> pd.DataFrame:
     """
     Sanitize survey conditional jump codes (-3) and missing text values.
-    1. Replaces -3, -3.0, '-3', '-3.0' with NOT_APPLICABLE_VALUE ('不适用').
+    1. Replaces -3 with NOT_APPLICABLE_VALUE ('不适用').
     2. Fills missing NaN values in text/object/string columns with '' so they don't render as 'nan'.
     """
-    clean_df = df.copy()
-    na_markers = {-3, -3.0, "-3", "-3.0"}
-
     # Process column-by-column to avoid pandas 2.x CoW block manager IndexError bug
-    for col in clean_df.columns:
-        s = clean_df[col]
+    for col in df.columns:
+        s = df[col]
         if pd.api.types.is_datetime64_any_dtype(s):
             continue
-
         if pd.api.types.is_numeric_dtype(s):
-            if s.isin([-3, -3.0]).any():
-                clean_df[col] = s.replace([-3, -3.0], NOT_APPLICABLE_VALUE)
+            if s.eq(-3).any():
+                df[col] = s.replace(-3, NOT_APPLICABLE_VALUE)
         else:
-            # String, object, categorical, and mixed text columns
-            clean_df[col] = s.map(
-                lambda x: (
-                    NOT_APPLICABLE_VALUE
-                    if x in na_markers
-                    else (
-                        ""
-                        if (pd.isna(x) or str(x).strip() in ("nan", "None", "NaT"))
-                        else x
-                    )
-                )
-            )
-
-    return clean_df
+            df[col] = _clean_text(s)
+    return df
 
 
 # ---------------------------------------------------------
@@ -116,58 +118,42 @@ def sanitize_special_and_missing_values(df: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------
 def clean_identifiers_and_demographics(df: pd.DataFrame) -> pd.DataFrame:
     """Sanitize patient phone numbers, national IDs, names, and age."""
-    clean_df = df.copy()
-
-    # Digits-only for phone columns
-    phone_cols = ["联系电话", "求诊者联系电话（手机号）", "紧急联系人电话（手机号）"]
-    for col in phone_cols:
-        if col in clean_df.columns:
-            clean_df[col] = (
-                clean_df[col]
+    patterns = {
+        # Digits-only for phone columns
+        r"\D+": ["联系电话", "求诊者联系电话（手机号）", "紧急联系人电话（手机号）"],
+        # National IDs: keep the 'X' check digit
+        r"[^0-9X]+": ["求诊者身份证号", "身份证号"],
+    }
+    for pattern, cols in patterns.items():
+        for col in (c for c in cols if c in df.columns):
+            df[col] = (
+                df[col]
                 .fillna("")
                 .astype(str)
+                .str.upper()
                 .str.replace(r"\.0$", "", regex=True)
-                .str.replace(r"\D+", "", regex=True)
+                .str.replace(pattern, "", regex=True)
             )
-
-    # National ID: strip whitespace and uppercase
-    id_cols = ["求诊者身份证号", "身份证号"]
-    for col in id_cols:
-        if col in clean_df.columns:
-            clean_df[col] = (
-                clean_df[col]
-                .fillna("")
-                .astype(str)
-                .str.strip()
-                .str.replace(r"\.0$", "", regex=True)
-            )
-            clean_df.loc[clean_df[col].isin(["nan", "None", "NaT"]), col] = ""
 
     # Names: strip whitespace
-    name_cols = ["姓名（实名）", "求诊者姓名", "紧急联系人的姓名"]
-    for col in name_cols:
-        if col in clean_df.columns:
-            clean_df[col] = clean_df[col].fillna("").astype(str).str.strip()
-            clean_df.loc[clean_df[col].isin(["nan", "None", "NaT"]), col] = ""
+    for col in ("姓名（实名）", "求诊者姓名", "紧急联系人的姓名"):
+        if col in df.columns:
+            df[col] = df[col].fillna("").astype(str).str.strip()
 
     # Numeric age
-    if "年龄" in clean_df.columns:
-        clean_df["年龄_数值"] = pd.to_numeric(clean_df["年龄"], errors="coerce")
-
-    return clean_df
+    if "年龄" in df.columns:
+        df["年龄_数值"] = pd.to_numeric(df["年龄"], errors="coerce")
+    return df
 
 
 # ---------------------------------------------------------
 # Pipeline Stage 3: Datetime Parsing
 # ---------------------------------------------------------
 def parse_datetime_fields(df: pd.DataFrame) -> pd.DataFrame:
-    """Parse submission timestamps and therapist contact dates."""
-    clean_df = df.copy()
-    if "提交答卷时间" in clean_df.columns:
-        clean_df["提交答卷时间"] = pd.to_datetime(
-            clean_df["提交答卷时间"], errors="coerce"
-        )
-    return clean_df
+    """Parse submission timestamps (column is created as NaT if absent)."""
+    col = "提交答卷时间"
+    df[col] = pd.to_datetime(df[col], errors="coerce") if col in df.columns else pd.NaT
+    return df
 
 
 # ---------------------------------------------------------
@@ -175,356 +161,168 @@ def parse_datetime_fields(df: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------
 def map_categorical_choices(df: pd.DataFrame) -> pd.DataFrame:
     """Map single-choice option codes to human-readable strings."""
-    clean_df = df.copy()
+    yes_no = {col: YES_NO_MAP for col in YES_NO_FIELDS}
+    for col, mapping in {**CHOICE_MAPS, **yes_no}.items():
+        if col in df.columns:
+            df[col] = _map_codes(df[col], mapping)
 
-    # Map multiple-choice questions
-    for col, choice_map in CHOICE_MAPS.items():
-        if col in clean_df.columns:
-
-            def _map_choice(val):
-                if pd.isna(val) or val == "" or val is None:
-                    return ""
-                # Normalize float strings like "1.0" -> "1"
-                s = str(val).strip()
-                if s.endswith(".0"):
-                    s = s[:-2]
-                if s in ("-3", NOT_APPLICABLE_VALUE, "不适用"):
-                    return NOT_APPLICABLE_VALUE
-                if s in ("nan", "None", "NaT"):
-                    return ""
-                return choice_map.get(s, s)
-
-            clean_df[col] = clean_df[col].apply(_map_choice)
-
-    # Map binary fields
-    for col in YES_NO_FIELDS:
-        if col in clean_df.columns:
-
-            def _map_yes_no(val):
-                if pd.isna(val) or val == "" or val is None:
-                    return ""
-                s = str(val).strip()
-                if s.endswith(".0"):
-                    s = s[:-2]
-                if s in ("-3", NOT_APPLICABLE_VALUE, "不适用"):
-                    return NOT_APPLICABLE_VALUE
-                if s in ("nan", "None", "NaT"):
-                    return ""
-                return YES_NO_MAP.get(s, YES_NO_MAP.get(val, s))
-
-            clean_df[col] = clean_df[col].apply(_map_yes_no)
-
-    # Standardize & map Family Support matrix items (SSRS Q37)
-    def _map_fam_support(val):
-        if pd.isna(val) or val == "" or val is None:
-            return NOT_APPLICABLE_VALUE
-        s = str(val).strip()
-        if s.endswith(".0"):
-            s = s[:-2]
-        if s in ("-3", NOT_APPLICABLE_VALUE, "不适用"):
-            return NOT_APPLICABLE_VALUE
-        if s in ("nan", "None", "NaT"):
-            return NOT_APPLICABLE_VALUE
-        return FAMILY_SUPPORT_MAP.get(s, s)
-
+    # Standardize & map Family Support matrix items (SSRS Q37) -> 家庭支持_{label}
     for label, candidates in FAMILY_SUPPORT_ITEMS:
-        col = next((c for c in candidates if c in clean_df.columns), None)
-        if col:
-            clean_df[f"家庭支持_{label}"] = clean_df[col].apply(_map_fam_support)
-        else:
-            clean_df[f"家庭支持_{label}"] = NOT_APPLICABLE_VALUE
-
-    clean_df["family_support_dict"] = clean_df.apply(
-        lambda r: {label: r[f"家庭支持_{label}"] for label, _ in FAMILY_SUPPORT_ITEMS},
-        axis=1,
-    )
-
-    return clean_df
+        col = next((c for c in candidates if c in df.columns), None)
+        df[f"家庭支持_{label}"] = (
+            _map_codes(df[col], FAMILY_SUPPORT_MAP).replace("", NOT_APPLICABLE_VALUE)
+            if col
+            else NOT_APPLICABLE_VALUE
+        )
+    return df
 
 
 # ---------------------------------------------------------
 # Pipeline Stage 5: Multi-Select Checkbox Consolidation
 # ---------------------------------------------------------
-def _extract_selected_labels(row: pd.Series, prefix: str) -> List[str]:
-    """Helper to extract selected labels from one-hot checkbox columns."""
-    selected = []
-    for col_name in row.index:
-        if col_name.startswith(prefix) and "(" in col_name and col_name.endswith(")"):
-            val = row[col_name]
-            # Consider 1, '1', 1.0, '是', True as selected
-            if val in (1, "1", 1.0, "1.0", "是", True):
-                label = col_name[len(prefix) : -1].strip()
-                selected.append(label)
-    return selected
-
-
 def consolidate_multiselect_groups(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Consolidate matrix checkbox columns (14, 19, 25, 39, 41, 目标)
-    into structured list columns and clean display strings.
+    Consolidate one-hot checkbox columns (14, 19, 25, 39, 41, 目标) into list columns.
+    The first column of a group may carry the question text before '—'
+    (e.g. '想要通过心理治疗改善的目标—目标(改善症状)'), so prefixes are matched on the
+    part after the last '—'.
     """
-    clean_df = df.copy()
-
-    groups = [
-        (COHABITANT_PREFIX, "cohabitants_list", "同居者_列表"),
-        (DIAGNOSIS_PREFIX, "diagnoses_list", "主诉诊断_列表"),
-        (RISK_PREFIX, "crisis_risks_list", "危机预警_列表"),
-        (OBJECTIVE_SUPPORT_PREFIX, "objective_support_list", "客观支持来源_列表"),
-        (SUBJECTIVE_SUPPORT_PREFIX, "subjective_support_list", "主观支持来源_列表"),
-        (GOAL_PREFIX, "treatment_goals_list", "治疗目标_列表"),
-    ]
-
-    for prefix, en_col, cn_col in groups:
-        matching_cols = [
-            c for c in clean_df.columns if c.startswith(prefix) and "(" in c
-        ]
-        if matching_cols:
-            extracted_series = clean_df.apply(
-                lambda r: _extract_selected_labels(r, prefix), axis=1
-            )
-            clean_df[en_col] = extracted_series
-            clean_df[cn_col] = extracted_series
-        else:
-            clean_df[en_col] = [[] for _ in range(len(clean_df))]
-            clean_df[cn_col] = [[] for _ in range(len(clean_df))]
-
-    return clean_df
+    tails = {c: str(c).split("—")[-1].strip() for c in df.columns}
+    for out_col, prefix in MULTISELECT_GROUPS.items():
+        cols = [c for c, t in tails.items() if t.startswith(prefix) and t.endswith(")")]
+        labels = np.array([tails[c][len(prefix) : -1].strip() for c in cols], dtype=object)
+        checked = df[cols].isin(_CHECKED).to_numpy()
+        df[out_col] = [labels[row].tolist() for row in checked]
+    return df
 
 
 # ---------------------------------------------------------
 # Pipeline Stage 6: Psychometric Scale Scoring Engine
 # ---------------------------------------------------------
-def _find_scale_columns(
-    df: pd.DataFrame, patterns: List[str], fallback_slice: Optional[List[int]] = None
-) -> List[Optional[str]]:
-    """Match survey columns using regex patterns with fallback to slice indices."""
-    matched_cols: List[Optional[str]] = []
-    all_cols = list(df.columns)
-
-    for pat in patterns:
-        found = None
-        for col in all_cols:
-            if re.search(pat, col):
-                found = col
-                break
-        matched_cols.append(found)
-
-    # Fallback to slice index if no columns matched
-    if not any(matched_cols) and fallback_slice and len(all_cols) >= fallback_slice[1]:
-        matched_cols = all_cols[fallback_slice[0] : fallback_slice[1]]
-
-    return matched_cols
-
-
-def _score_scale_item(val, max_score: int = 3) -> int:
-    """Safely convert a 1-indexed survey response integer into a 0-indexed Likert score."""
-    if pd.isna(val) or val is None or val == "":
-        return 0
-    val_str = str(val).strip()
-    if val_str in (NOT_APPLICABLE_VALUE, "不适用", "-3", "-3.0", "not applicable"):
-        return 0
-    try:
-        return max(0, min(int(float(val_str)) - 1, max_score))
-    except (ValueError, TypeError):
-        return 0
+def find_scale_columns(columns: Sequence, scale: dict) -> List[Optional[str]]:
+    """Match each scale item to a column via regex, falling back to fixed slice indices."""
+    columns = list(columns)
+    matched = [
+        next((c for c in columns if re.search(pat, str(c))), None)
+        for pat in scale["patterns"]
+    ]
+    lo, hi = scale["fallback"]
+    if not any(matched) and len(columns) >= hi:
+        matched = columns[lo:hi]
+    return matched
 
 
 def compute_clinical_scales(df: pd.DataFrame) -> pd.DataFrame:
     """
     Calculate psychometric scale item scores, total scores, severity tiers,
-    and high-risk crisis flags for PHQ-9, GAD-7, and ISI.
+    and high-risk crisis flags for PHQ-9, GAD-7, and ISI (see mappings.SCALES).
+    Item scores convert 1-indexed responses to 0-indexed Likert scores, clipped
+    to [0, max_item]; blanks / '不适用' / non-numeric answers score 0.
     """
-    clean_df = df.copy()
-
-    # --- 1. PHQ-9 (9 items, item max score 3, total 27) ---
-    phq_cols = _find_scale_columns(clean_df, PHQ_ITEM_PATTERNS, PHQ_FIELDS)
-    phq_score_cols = []
-
-    for idx, col in enumerate(phq_cols):
-        score_col = f"_phq_score_{idx}"
-        phq_score_cols.append(score_col)
-        if col and col in clean_df.columns:
-            clean_df[score_col] = clean_df[col].apply(
-                lambda v: _score_scale_item(v, max_score=3)
+    for scale in SCALES:
+        score_cols = []
+        for idx, col in enumerate(find_scale_columns(df.columns, scale)):
+            score_col = f"_{scale['key']}_score_{idx}"
+            raw = pd.to_numeric(df[col], errors="coerce") if col else np.nan
+            df[score_col] = (
+                (np.trunc(pd.Series(raw, index=df.index, dtype=float)) - 1)
+                .clip(0, scale["max_item"])
+                .fillna(0)
+                .astype(int)
             )
-        else:
-            clean_df[score_col] = 0
+            score_cols.append(score_col)
 
-    clean_df["PHQ_Total"] = clean_df[phq_score_cols].sum(axis=1)
+        total = df[score_cols].sum(axis=1)
+        df[scale["total_col"]] = total
+        df[scale["severity_col"]] = pd.cut(
+            total, [-np.inf, *scale["thresholds"], np.inf], labels=scale["tiers"]
+        ).astype(str)
 
-    def _phq_severity(score: int) -> str:
-        if score <= 4:
-            return "无/极轻度"
-        elif score <= 9:
-            return "轻度抑郁"
-        elif score <= 14:
-            return "中度抑郁"
-        elif score <= 19:
-            return "中重度抑郁"
-        return "重度抑郁"
-
-    clean_df["PHQ_Severity"] = clean_df["PHQ_Total"].apply(_phq_severity)
-
-    # --- 2. GAD-7 (7 items, item max score 3, total 21) ---
-    gad_cols = _find_scale_columns(clean_df, GAD_ITEM_PATTERNS, GAD_FIELDS)
-    gad_score_cols = []
-
-    for idx, col in enumerate(gad_cols):
-        score_col = f"_gad_score_{idx}"
-        gad_score_cols.append(score_col)
-        if col and col in clean_df.columns:
-            clean_df[score_col] = clean_df[col].apply(
-                lambda v: _score_scale_item(v, max_score=3)
-            )
-        else:
-            clean_df[score_col] = 0
-
-    clean_df["GAD_Total"] = clean_df[gad_score_cols].sum(axis=1)
-
-    def _gad_severity(score: int) -> str:
-        if score <= 4:
-            return "无/极轻度"
-        elif score <= 9:
-            return "轻度焦虑"
-        elif score <= 14:
-            return "中度焦虑"
-        return "重度焦虑"
-
-    clean_df["GAD_Severity"] = clean_df["GAD_Total"].apply(_gad_severity)
-
-    # --- 3. ISI (7 items, item max score 4, total 28) ---
-    isi_cols = _find_scale_columns(clean_df, ISI_ITEM_PATTERNS, ISI_FIELDS)
-    isi_score_cols = []
-
-    for idx, col in enumerate(isi_cols):
-        score_col = f"_isi_score_{idx}"
-        isi_score_cols.append(score_col)
-        if col and col in clean_df.columns:
-            clean_df[score_col] = clean_df[col].apply(
-                lambda v: _score_scale_item(v, max_score=4)
-            )
-        else:
-            clean_df[score_col] = 0
-
-    clean_df["ISI_TOTAL"] = clean_df[isi_score_cols].sum(axis=1)
-
-    def _isi_severity(score: int) -> str:
-        if score <= 7:
-            return "无显著失眠"
-        elif score <= 14:
-            return "轻度失眠"
-        elif score <= 21:
-            return "中度失眠"
-        return "重度失眠"
-
-    clean_df["ISI_Severity"] = clean_df["ISI_TOTAL"].apply(_isi_severity)
-
-    # --- 4. Crisis Risk Assessment (Q25 & PHQ Item 9) ---
-    def _check_crisis_risk(row: pd.Series) -> bool:
-        # Check explicit self-harm / suicide checkbox options
-        risks = row.get("crisis_risks_list", [])
-        has_q25_risk = any(
-            r in ["自伤意念", "自伤行为", "自杀意念", "自杀想法"] for r in risks
-        )
-        # Check PHQ Item 9 (Suicidal ideation item score > 0)
-        has_phq9_risk = row.get("_phq_score_8", 0) > 0
-        return has_q25_risk or has_phq9_risk
-
-    clean_df["has_crisis_risk"] = clean_df.apply(_check_crisis_risk, axis=1)
-
-    def _get_active_risk_labels(row: pd.Series) -> List[str]:
-        labels = [r for r in row.get("crisis_risks_list", []) if r != "无"]
-        if row.get("_phq_score_8", 0) > 0 and "自伤意念" not in labels:
-            labels.append("PHQ-9 自伤念头阳性")
-        return labels
-
-    clean_df["crisis_risk_flags"] = clean_df.apply(_get_active_risk_labels, axis=1)
-
-    return clean_df
+    # --- Crisis Risk Assessment (Q25 checkboxes & PHQ item 9: suicidal ideation) ---
+    risks = df["crisis_risks_list"]
+    phq9_positive = df["_phq_score_8"] > 0
+    df["has_crisis_risk"] = risks.map(lambda r: not CRISIS_TERMS.isdisjoint(r)) | phq9_positive
+    df["crisis_risk_flags"] = [
+        [r for r in rs if r != "无"]
+        + (["PHQ-9 自伤念头阳性"] if pos and "自伤意念" not in rs else [])
+        for rs, pos in zip(risks, phq9_positive)
+    ]
+    return df
 
 
 # ---------------------------------------------------------
 # Pipeline Stage 7: Longitudinal History & Entity Tracking
 # ---------------------------------------------------------
 def track_longitudinal_patient_history(df: pd.DataFrame) -> pd.DataFrame:
-    """Group submissions by Patient ID (fallback to Phone) and compute visit frequency."""
-    clean_df = df.copy()
+    """
+    Group submissions by patient (ID card, falling back to phone per row) and compute
+    visit frequency, first/latest entry and the latest non-empty remark / progress.
+    Rows with neither ID nor phone are treated as separate patients.
+    """
+    df["_original_idx"] = df.index
+    # Stable sort so attempt #1 is always the earliest (ties keep file order)
+    df = df.sort_values("提交答卷时间", kind="stable").reset_index(drop=True)
 
-    # Determine primary grouping column
-    id_col = "求诊者身份证号" if "求诊者身份证号" in clean_df.columns else "联系电话"
+    key = _nonblank(df, "求诊者身份证号").fillna(_nonblank(df, "联系电话"))
+    key = key.fillna(pd.Series("_row" + df.index.astype(str), index=df.index))
+    groups = df.groupby(key, sort=False)
+    times = groups["提交答卷时间"]
 
-    clean_df["_original_idx"] = clean_df.index
+    df["提交次数"] = groups.cumcount() + 1
+    df["总提交次数"] = times.transform("size")
+    df["首次登记时间"] = times.transform("min")
+    df["最新登记时间"] = times.transform("max")
+    # Rows are chronological, so "last" = most recent non-empty entry
+    for out_col, src_col in (("最近备注", "备注"), ("当前治疗进展", "回访治疗安排")):
+        df[out_col] = _nonblank(df, src_col).groupby(key).transform("last").fillna("-")
 
-    if id_col in clean_df.columns and "提交答卷时间" in clean_df.columns:
-        # Sort chronologically so attempt #1 is always the earliest
-        clean_df = clean_df.sort_values("提交答卷时间", ascending=True).reset_index(
-            drop=True
-        )
-
-        # 1-indexed attempt number
-        clean_df["提交次数"] = clean_df.groupby(id_col).cumcount() + 1
-        # Total number of entries for this patient
-        clean_df["总提交次数"] = clean_df.groupby(id_col)[id_col].transform("count")
-        # Exact date/time of the first/last entry in database
-        clean_df["首次登记时间"] = clean_df.groupby(id_col)["提交答卷时间"].transform(
-            "min"
-        )
-        clean_df["最新登记时间"] = clean_df.groupby(id_col)["提交答卷时间"].transform(
-            "max"
-        )
-        clean_df["最近备注"] = clean_df.groupby(id_col)["备注"].transform("max")
-        # Check latest progress (support new and legacy column names)
-        progress_col = (
-            "回访治疗安排"
-            if "回访治疗安排" in clean_df.columns
-            else (
-                "备注（回访治疗安排）"
-                if "备注（回访治疗安排）" in clean_df.columns
-                else None
-            )
-        )
-        if progress_col:
-            clean_df["当前治疗进展"] = clean_df.groupby(id_col)[progress_col].transform(
-                "max"
-            )
-        else:
-            clean_df["当前治疗进展"] = "-"
-    else:
-        clean_df["提交次数"] = 1
-        clean_df["总提交次数"] = 1
-        clean_df["首次登记时间"] = clean_df.get("提交答卷时间")
-        clean_df["最新登记时间"] = clean_df.get("提交答卷时间")
-        clean_df["最近备注"] = clean_df.get("备注")
-        clean_df["当前治疗进展"] = "-"
-
-    return clean_df
+    # Unique dropdown label: "姓名 (YYYY-mm-dd HH:MM)", suffixed " #n" on collisions
+    names = df.get("姓名（实名）", pd.Series("", index=df.index)).replace("", "未知")
+    label = names.astype(str) + " (" + df["提交答卷时间"].dt.strftime("%Y-%m-%d %H:%M").fillna("-") + ")"
+    dup = label.groupby(label).cumcount()
+    df["_label"] = label.where(dup == 0, label + " #" + (dup + 1).astype(str))
+    return df
 
 
 # ---------------------------------------------------------
-# Master Pipeline Execution Function
+# Master Pipeline Execution Functions
 # ---------------------------------------------------------
-def run_cleaning_pipeline(raw_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Execute full multi-stage data cleaning and clinical scoring pipeline.
-    Uses method chaining (pipe) for modularity and testability.
-    """
+def run_survey_pipeline(survey_df: pd.DataFrame) -> pd.DataFrame:
+    """Cleaning + scoring stages (independent of the editable therapist columns)."""
     return (
-        raw_df.copy()
-        .pipe(ensure_administrative_columns)
+        survey_df.copy()
         .pipe(sanitize_special_and_missing_values)
         .pipe(clean_identifiers_and_demographics)
         .pipe(parse_datetime_fields)
         .pipe(map_categorical_choices)
         .pipe(consolidate_multiselect_groups)
         .pipe(compute_clinical_scales)
-        .pipe(track_longitudinal_patient_history)
     )
+
+
+def _survey_part(raw_df: pd.DataFrame) -> pd.DataFrame:
+    return raw_df.drop(columns=ADMIN_STR_COLS, errors="ignore")
+
+
+def _attach_admin(survey_df: pd.DataFrame, raw_df: pd.DataFrame) -> pd.DataFrame:
+    """Join the (string) administrative columns back on and compute patient history."""
+    admin = raw_df.reindex(columns=ADMIN_STR_COLS).fillna("").astype(str)
+    return track_longitudinal_patient_history(survey_df.join(admin))
+
+
+def run_cleaning_pipeline(raw_df: pd.DataFrame) -> pd.DataFrame:
+    """Execute the full (uncached) multi-stage cleaning and clinical scoring pipeline."""
+    return _attach_admin(run_survey_pipeline(_survey_part(raw_df)), raw_df)
 
 
 # ---------------------------------------------------------
 # Streamlit-Cached Public Interface
 # ---------------------------------------------------------
-@st.cache_data(show_spinner="正在处理数据...")
+@st.cache_data(show_spinner="正在处理数据...", max_entries=2)
+def _cached_survey_pipeline(survey_df: pd.DataFrame) -> pd.DataFrame:
+    return run_survey_pipeline(survey_df)
+
+
 def preprocess_data(raw_df: pd.DataFrame) -> pd.DataFrame:
-    """Cached entry point for the Streamlit dashboard."""
-    return run_cleaning_pipeline(raw_df)
+    """Entry point for the Streamlit dashboard (reuses cached survey pipeline)."""
+    return _attach_admin(_cached_survey_pipeline(_survey_part(raw_df)), raw_df)
