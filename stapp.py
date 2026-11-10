@@ -35,9 +35,7 @@ def step_patient(step: int):
     st.session_state.dropdown_val = name_options[(curr_idx + step) % len(name_options)]
 
 
-def _get_filter_options(
-    df: pd.DataFrame, col: str, order: list | None = None
-) -> list:
+def _get_filter_options(df: pd.DataFrame, col: str, order: list | None = None) -> list:
     """Extract ordered unique options for a categorical filter column."""
     if col not in df.columns:
         return []
@@ -71,11 +69,10 @@ def init_or_reset_filters(df: pd.DataFrame, force: bool = False):
 
     defaults = {
         "filter_date_range": (min_date, max_date),
-        "filter_treatments": _get_filter_options(
-            df, "请选择您需要预约登记的治疗方式"
-        ),
+        "filter_treatments": _get_filter_options(df, "请选择您需要预约登记的治疗方式"),
         "filter_sex": _get_filter_options(df, "性别"),
         "filter_rec": [],
+        "filter_priority": False,
         "filter_marriage": _get_filter_options(
             df, "婚姻状态", order=["单身", "未婚", "已婚", "离婚", "丧偶"]
         ),
@@ -117,14 +114,13 @@ total_count = len(df)
 high_risk_total = (
     int(df["has_crisis_risk"].sum()) if "has_crisis_risk" in df.columns else 0
 )
-st.sidebar.caption(
-    f"📊 数据库全量：**{total_count}** 位 | 🚨 高危：**{high_risk_total}** 位"
-)
+st.sidebar.caption(f"📊 总共：**{total_count}** 位 | 🚨 高危：**{high_risk_total}** 位")
 
 # 0. Quick Reset Button
 if st.sidebar.button("🔄 重置所有筛选", use_container_width=True):
     init_or_reset_filters(df, force=True)
     st.rerun()
+
 
 # 1. Filter By Date
 date_range = st.sidebar.date_input(
@@ -138,7 +134,12 @@ if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
 else:
     filtered_df = df
 
-# 2. Filter By Treatment Type (预约治疗方式)
+
+# 2. Filter By Priority (优先安排)
+if st.sidebar.checkbox("‼️ 仅看优先安排", key="filter_priority"):
+    filtered_df = filtered_df[filtered_df["优先安排"] == "是"]
+
+# 3. Filter By Treatment Type (预约治疗方式)
 filtered_df = _sidebar_multiselect_filter(
     df,
     filtered_df,
@@ -147,7 +148,7 @@ filtered_df = _sidebar_multiselect_filter(
     key="filter_treatments",
 )
 
-# 3. Filter By Sex (性别)
+# 4. Filter By Sex (性别)
 filtered_df = _sidebar_multiselect_filter(
     df,
     filtered_df,
@@ -156,7 +157,7 @@ filtered_df = _sidebar_multiselect_filter(
     key="filter_sex",
 )
 
-# 4. Filter By Treatment Recommendation (治疗推荐)
+# 5. Filter By Treatment Recommendation (治疗推荐)
 selected_recs = st.sidebar.multiselect(
     "🏷️ 治疗推荐",
     options=["未推荐/待定"] + TREATMENT_OPTIONS,
@@ -173,7 +174,7 @@ if selected_recs:
         mask |= rec_s.str.contains("|".join(targets), regex=True)
     filtered_df = filtered_df[mask]
 
-# 5. Filter By Marriage Status (婚姻情况)
+# 6. Filter By Marriage Status (婚姻情况)
 filtered_df = _sidebar_multiselect_filter(
     df,
     filtered_df,
@@ -183,7 +184,7 @@ filtered_df = _sidebar_multiselect_filter(
     order=["单身", "未婚", "已婚", "离婚", "丧偶"],
 )
 
-# 6. Filter By Crisis Risk (危机预警)
+# 7. Filter By Crisis Risk (危机预警)
 crisis_filter = st.sidebar.selectbox(
     "🚨 危机预警筛选",
     options=["全部求诊者", "🚨 仅高危预警 (自伤/自杀/PHQ9项)", "常规求诊者"],
@@ -194,7 +195,7 @@ if crisis_filter == "🚨 仅高危预警 (自伤/自杀/PHQ9项)":
 elif crisis_filter == "常规求诊者":
     filtered_df = filtered_df[~filtered_df["has_crisis_risk"].astype(bool)]
 
-# 7. Filter By First Therapist (首访治疗师)
+# 8. Filter By First Therapist (首访治疗师)
 therapist_s = df["首访治疗师"].fillna("").astype(str).str.strip()
 all_therapists = sorted(t for t in therapist_s.unique() if t not in ("", "-", "不适用"))
 selected_therapist = st.sidebar.selectbox(
@@ -553,9 +554,13 @@ with tab5:
 # Main View: Evaluation & Follow-up Workspace (Bottom Area)
 # ---------------------------------------------------------
 st.markdown("---")
-st.markdown("### ✏️ 评估随访与处置工作台")
+st.markdown("### ✏️ 评估随访")
 
 with st.form("edit_patient_form"):
+    new_priority = st.checkbox(
+        "优先安排",
+        value=(safe_str(person.get("优先安排")) == "是"),
+    )
     col_first, col_follow = st.columns(2, gap="large")
 
     with col_first:
@@ -597,6 +602,9 @@ with st.form("edit_patient_form"):
         new_followup_notes = st.text_input(
             "回访治疗安排", value=safe_str(person.get("回访治疗安排"))
         )
+        new_no_arr_reason = st.text_input(
+            "未安排说明", value=safe_str(person.get("未安排说明"))
+        )
 
     new_note = st.text_input("备注", value=safe_str(person.get("备注")))
 
@@ -613,6 +621,7 @@ if save_current:
     raw_idx = int(person["_original_idx"])
     raw_df = st.session_state["raw_df"]
     updates = {
+        "优先安排": "是" if new_priority else "",
         "首访治疗师": new_first_therapist,
         "首访时间": str(new_first_date) if new_first_date is not None else "",
         "首访情况": new_first_outcome,
@@ -622,6 +631,7 @@ if save_current:
         "回访时间": str(new_followup_date) if new_followup_date is not None else "",
         "回访情况": new_followup_outcome,
         "回访治疗安排": new_followup_notes,
+        "未安排说明": new_no_arr_reason,
         "备注": new_note,
     }
     for col, val in updates.items():

@@ -90,18 +90,22 @@ def run_tests():
 
     # Test Edit-Save workflow
     raw_idx = int(row0["_original_idx"])
+    loaded_raw.at[raw_idx, "优先安排"] = "是"
     loaded_raw.at[raw_idx, "首访治疗师"] = "测试治疗师"
     loaded_raw.at[raw_idx, "首访情况"] = "本人接听"
     loaded_raw.at[raw_idx, "治疗推荐"] = "个体, 家庭"
     loaded_raw.at[raw_idx, "回访治疗安排"] = "已安排周三首访"
+    loaded_raw.at[raw_idx, "未安排说明"] = "患者暂缓预约"
 
     recleaned_df = preprocess_data(loaded_raw)
     re_row0 = recleaned_df.iloc[0]
+    assert re_row0["优先安排"] == "是", "Edited priority not saved!"
     assert re_row0["首访治疗师"] == "测试治疗师", "Edited therapist not saved!"
     assert re_row0["首访情况"] == "本人接听", "Edited outcome not saved!"
     assert re_row0["当前治疗进展"] == "已安排周三首访", (
         "Therapist progress not updated!"
     )
+    assert re_row0["未安排说明"] == "患者暂缓预约", "Edited no-arrangement reason not saved!"
 
     # Verify working columns preserved
     for w_col in WORKING_COMPAT_COLS:
