@@ -7,7 +7,8 @@ mappings.py - Survey dictionaries, scale mappings, form options, and column cons
 # ---------------------------------------------------------
 
 # Shared choice map for all 5 SSRS Q37 family support sub-questions
-_FAM_SUPPORT_CHOICE = {"1": "无", "2": "极少", "3": "一般", "4": "全力支持"}
+# (applied to the columns listed in FAMILY_SUPPORT_ITEMS)
+FAMILY_SUPPORT_MAP = {"1": "无", "2": "极少", "3": "一般", "4": "全力支持"}
 
 CHOICE_MAPS = {
     "填写者": {"1": "求诊者本人", "2": "其他（请说明您与求诊人的关系）"},
@@ -42,37 +43,18 @@ CHOICE_MAPS = {
         "5": "硕士",
         "6": "博士",
     },
-    "婚姻状态": {"1": "单身", "2": "未婚", "3": "已婚", "4": "离婚", "5": "丧偶"},
-    "主要同居者": {
-        "1": "独居",
-        "2": "母父",
-        "3": "子女",
-        "4": "伴侣/配偶",
-        "5": "兄弟姐妹",
-        "6": "外祖母父",
-        "7": "其他",
-    },
-    "诊断": {
-        "1": "抑郁",
-        "2": "焦虑",
-        "3": "失眠",
-        "4": "强迫",
-        "5": "双相",
-        "6": "精神分裂症",
-        "7": "其他",
+    "婚姻状态": {
+        "1": "单身",
+        "2": "未婚",
+        "3": "已婚",
+        "4": "离婚",
+        "5": "丧偶",
     },
     "未服药情况": {
         "1": "医生未建议",
         "2": "服药顾虑未服药",
         "3": "已自行停药",
         "4": "遵医嘱停药",
-    },
-    "是否有以下想法或行为": {
-        "1": "无",
-        "2": "自伤意念",
-        "3": "自伤行为",
-        "4": "自杀意念",
-        "5": "自杀想法",
     },
     "您有多少关系密切，可以得到支持和帮助的朋友？（只选一项）": {
         "1": "0",
@@ -81,12 +63,6 @@ CHOICE_MAPS = {
         "4": "6个或6个以上",
     },
     "近一年来您：（只选一项）": {
-        "1": "远离家人，且独居一室",
-        "2": "住处经常变动，多数时间和陌生人住在一起",
-        "3": "和同学、同事或朋友住在一起",
-        "4": "和家人住在一起",
-    },
-    "近一年来居住情况": {
         "1": "远离家人，且独居一室",
         "2": "住处经常变动，多数时间和陌生人住在一起",
         "3": "和同学、同事或朋友住在一起",
@@ -131,11 +107,6 @@ CHOICE_MAPS = {
         "3": "经常参加",
         "4": "主动参加并积极活动",
     },
-    "从家庭成员得到的支持和照顾—夫妻（恋人）": _FAM_SUPPORT_CHOICE,
-    "从家庭成员得到的支持和照顾—父母": _FAM_SUPPORT_CHOICE,
-    "从家庭成员得到的支持和照顾—儿女": _FAM_SUPPORT_CHOICE,
-    "从家庭成员得到的支持和照顾—兄弟姐妹": _FAM_SUPPORT_CHOICE,
-    "从家庭成员得到的支持和照顾—其他成员（如嫂子）": _FAM_SUPPORT_CHOICE,
     "过去，在您遇到急难情况时，曾经得到的经济支持和解决实际问题的帮助的来源有：": {
         "1": "无来源",
         "2": "有来源",
@@ -148,50 +119,11 @@ CHOICE_MAPS = {
         "1": "团体",
         "2": "个体",
         "3": "家庭",
-        "团体治疗": "团体",
-        "个体治疗": "个体",
-        "家庭治疗": "家庭",
     },
-    "首次来我院就诊年份": {
-        "1": "2021",
-        "2": "2020",
-        "3": "2019",
-        "4": "2018",
-        "5": "2017",
-        "6": "2016",
-        "7": "2015",
-        "8": "2014",
-        "9": "2013",
-        "10": "2012",
-        "11": "2011",
-        "12": "2010",
-        "13": "2009",
-        "14": "2008",
-        "15": "2007",
-        "16": "2006",
-        "17": "2005",
-        "18": "2004",
-        "19": "2003",
-        "20": "2002",
-        "21": "2001",
-        "22": "2000",
-        "23": "1999",
-        "24": "1998",
-        "25": "1997",
-        "26": "1996",
-        "27": "1995",
-        "28": "1994",
-        "29": "1993",
-        "30": "1992",
-        "31": "1991",
-        "32": "1990",
-        "33": "1990以前",
-        "34": "2022",
-        "35": "2023",
-        "36": "2024",
-        "37": "2025",
-        "38": "2026",
-    },
+    # Codes 1-32 -> 2021..1990, 33 -> '1990以前', 34-38 -> 2022..2026
+    "首次来我院就诊年份": {str(i): str(2022 - i) for i in range(1, 33)}
+    | {"33": "1990以前"}
+    | {str(i): str(1988 + i) for i in range(34, 39)},
 }
 
 # ---------------------------------------------------------
@@ -202,17 +134,8 @@ NOT_APPLICABLE_VALUE = "不适用"
 # ---------------------------------------------------------
 # Binary (Yes/No) Fields
 # ---------------------------------------------------------
-YES_NO_MAP = {
-    1: "是",
-    2: "否",
-    "1": "是",
-    "2": "否",
-    "是": "是",
-    "否": "否",
-    -3: NOT_APPLICABLE_VALUE,
-    "-3": NOT_APPLICABLE_VALUE,
-    "-3.0": NOT_APPLICABLE_VALUE,
-}
+# Keys are normalised string codes ("1", "1.0", 1 all -> "1"); -3 is handled upstream.
+YES_NO_MAP = {"1": "是", "2": "否"}
 
 YES_NO_FIELDS = [
     "目前是否已经休学/休假或离职",
@@ -224,6 +147,7 @@ YES_NO_FIELDS = [
     "是否有精神/心理疾病家族史",
     "是否有躯体疾病",
     "过去心理咨询",
+    "当前心理咨询",
     "曾经是否接受过心理咨询/心理治疗",
     "目前是否正在进行心理咨询",
 ]
@@ -231,31 +155,14 @@ YES_NO_FIELDS = [
 # ---------------------------------------------------------
 # Family Support Matrix (SSRS Q37) Constants
 # ---------------------------------------------------------
-FAMILY_SUPPORT_MAP = {
-    1: "无",
-    2: "极少",
-    3: "一般",
-    4: "全力支持",
-    "1": "无",
-    "2": "极少",
-    "3": "一般",
-    "4": "全力支持",
-    "无": "无",
-    "极少": "极少",
-    "一般": "一般",
-    "全力支持": "全力支持",
-    -3: NOT_APPLICABLE_VALUE,
-    "-3": NOT_APPLICABLE_VALUE,
-    "-3.0": NOT_APPLICABLE_VALUE,
-}
 
 FAMILY_SUPPORT_ITEMS = [
-    ("夫妻（恋人）", ["从家庭成员得到的支持和照顾—夫妻（恋人）", "夫妻（恋人）"]),
-    ("父母", ["从家庭成员得到的支持和照顾—父母", "父母"]),
-    ("儿女", ["从家庭成员得到的支持和照顾—儿女", "儿女"]),
-    ("兄弟姐妹", ["从家庭成员得到的支持和照顾—兄弟姐妹", "兄弟姐妹"]),
+    ("性缘伴侣", ["从家庭成员得到的支持和照顾—夫妻（恋人）", "夫妻（恋人）"]),
+    ("双亲", ["从家庭成员得到的支持和照顾—父母", "父母"]),
+    ("孩子", ["从家庭成员得到的支持和照顾—儿女", "儿女"]),
+    ("姊妹", ["从家庭成员得到的支持和照顾—兄弟姐妹", "兄弟姐妹"]),
     (
-        "其他成员（如嫂子）",
+        "其余成员",
         [
             "从家庭成员得到的支持和照顾—其他成员（如嫂子）",
             "其他成员（如嫂子）",
@@ -265,19 +172,35 @@ FAMILY_SUPPORT_ITEMS = [
 ]
 
 # ---------------------------------------------------------
-# Sidebar Edit Form Options
-# Multi-Select Checkbox Group Prefixes
+# Multi-Select Checkbox Groups: output list column -> column prefix
+# (columns look like "14(父母)"; the label inside the brackets is collected)
 # ---------------------------------------------------------
-COHABITANT_PREFIX = "14("
-DIAGNOSIS_PREFIX = "19("
-RISK_PREFIX = "25("
-OBJECTIVE_SUPPORT_PREFIX = "39("
-SUBJECTIVE_SUPPORT_PREFIX = "41("
-GOAL_PREFIX = "目标("
+MULTISELECT_GROUPS = {
+    "cohabitants_list": "14(",
+    "diagnoses_list": "19(",
+    "crisis_risks_list": "25(",
+    "objective_support_list": "39(",
+    "subjective_support_list": "41(",
+    "treatment_goals_list": "目标(",
+}
 
 # ---------------------------------------------------------
 # Sidebar Edit Form Options & Administrative Columns
 # ---------------------------------------------------------
+EDITABLE_COLS = [
+    "优先安排",
+    "首访治疗师",
+    "首访时间",
+    "首访情况",
+    "治疗推荐",
+    "未推荐说明",
+    "回访治疗师",
+    "回访时间",
+    "回访情况",
+    "回访治疗安排",
+    "备注",
+]
+
 CONTACT_OUTCOMES = [
     "",
     "本人接听",
@@ -286,6 +209,7 @@ CONTACT_OUTCOMES = [
     "语音留言",
     "号码有误/空号",
     "关机/停机",
+    "重复登记",
 ]
 TREATMENT_OPTIONS = [
     "个体",
@@ -298,29 +222,19 @@ TREATMENT_OPTIONS = [
     "心600",
     "科研",
 ]
-EDITABLE_COLS = [
-    "首访治疗师",
-    "首访时间",
-    "首访情况",
-    "治疗推荐",
-    "未推荐说明",
-    "回访治疗师",
-    "回访时间",
-    "回访情况",
-    "回访治疗安排",
-]
 
 # Working compatibility columns (not displayed in UI, but preserved in raw data if present)
 WORKING_COMPAT_COLS = ["治疗推荐1", "治疗推荐2", "治疗推荐3"]
-ALL_ADMIN_COLS = EDITABLE_COLS + WORKING_COMPAT_COLS
+ARCHIVED_COMPAT_COLS = [
+    "备注",
+    "评估时间（旧）",
+    "备注（旧）",
+    "治疗推荐（旧）",
+    "是否愿意去心600（旧）",
+]
+ALL_ADMIN_COLS = EDITABLE_COLS + WORKING_COMPAT_COLS + ARCHIVED_COMPAT_COLS
 
 # ---------------------------------------------------------
-# Likert Scales & Score Maps
-# ---------------------------------------------------------
-
-
-# ---------------------------------------------------------
-# Psychometric Scale Item Labels
 # Psychometric Scale Item Patterns & Labels
 # ---------------------------------------------------------
 PHQ_ITEM_PATTERNS = [
@@ -346,9 +260,6 @@ PHQ_LABELS = [
     "8. 动作迟缓/烦躁",
     "9. 自伤意念",
 ]
-# Backward-compatibility alias
-phq_labels = PHQ_LABELS
-
 GAD_ITEM_PATTERNS = [
     r"感觉紧张",
     r"不能够停止",
@@ -368,7 +279,6 @@ GAD_LABELS = [
     "6. 易怒急躁",
     "7. 恐惧感",
 ]
-# Backward-compatibility alias
 
 ISI_ITEM_PATTERNS = [
     r"[—\s]1\.入睡困难",
@@ -390,10 +300,6 @@ ISI_LABELS = [
     "7. 担忧痛苦程度",
 ]
 
-# Backward-compatibility aliases
-phq_labels = PHQ_LABELS
-gad_labels = GAD_LABELS
-
 # ---------------------------------------------------------
 # Column Slice Indices (Resilient to column shifts)
 # ---------------------------------------------------------
@@ -401,4 +307,53 @@ gad_labels = GAD_LABELS
 PHQ_FIELDS = [49, 58]
 GAD_FIELDS = [58, 65]
 ISI_FIELDS = [65, 72]
-DIAGNOSIS_FIELDS = [30, 37]
+
+# ---------------------------------------------------------
+# Scale Definitions (single source of truth for scoring + UI)
+# thresholds: upper bounds (inclusive) of each severity tier, aligned with `tiers`
+# Output columns: _{key}_score_{i}, total_col, severity_col
+# ---------------------------------------------------------
+SCALES = [
+    {
+        "key": "phq",
+        "name": "PHQ-9",
+        "title": "抑郁筛查量表 (PHQ-9)",
+        "chart_title": "PHQ-9 抑郁症状条目得分",
+        "patterns": PHQ_ITEM_PATTERNS,
+        "labels": PHQ_LABELS,
+        "fallback": PHQ_FIELDS,
+        "max_item": 3,
+        "total_col": "PHQ_Total",
+        "severity_col": "PHQ_Severity",
+        "thresholds": [4, 9, 14, 19],
+        "tiers": ["无/极轻度", "轻度抑郁", "中度抑郁", "中重度抑郁", "重度抑郁"],
+    },
+    {
+        "key": "gad",
+        "name": "GAD-7",
+        "title": "广泛性焦虑量表 (GAD-7)",
+        "chart_title": "GAD-7 焦虑症状条目得分",
+        "patterns": GAD_ITEM_PATTERNS,
+        "labels": GAD_LABELS,
+        "fallback": GAD_FIELDS,
+        "max_item": 3,
+        "total_col": "GAD_Total",
+        "severity_col": "GAD_Severity",
+        "thresholds": [4, 9, 14],
+        "tiers": ["无/极轻度", "轻度焦虑", "中度焦虑", "重度焦虑"],
+    },
+    {
+        "key": "isi",
+        "name": "ISI",
+        "title": "失眠严重程度量表 (ISI)",
+        "chart_title": "ISI 失眠症状条目得分 (0-4)",
+        "patterns": ISI_ITEM_PATTERNS,
+        "labels": ISI_LABELS,
+        "fallback": ISI_FIELDS,
+        "max_item": 4,
+        "total_col": "ISI_TOTAL",
+        "severity_col": "ISI_Severity",
+        "thresholds": [7, 14, 21],
+        "tiers": ["无显著失眠", "轻度失眠", "中度失眠", "重度失眠"],
+    },
+]
