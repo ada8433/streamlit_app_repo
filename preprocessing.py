@@ -152,7 +152,11 @@ def clean_identifiers_and_demographics(df: pd.DataFrame) -> pd.DataFrame:
 def parse_datetime_fields(df: pd.DataFrame) -> pd.DataFrame:
     """Parse submission timestamps (column is created as NaT if absent)."""
     col = "提交答卷时间"
-    df[col] = pd.to_datetime(df[col], errors="coerce") if col in df.columns else pd.NaT
+    df[col] = (
+        pd.to_datetime(df[col], format="mixed", errors="coerce")
+        if col in df.columns
+        else pd.NaT
+    )
     return df
 
 
@@ -190,7 +194,9 @@ def consolidate_multiselect_groups(df: pd.DataFrame) -> pd.DataFrame:
     tails = {c: str(c).split("—")[-1].strip() for c in df.columns}
     for out_col, prefix in MULTISELECT_GROUPS.items():
         cols = [c for c, t in tails.items() if t.startswith(prefix) and t.endswith(")")]
-        labels = np.array([tails[c][len(prefix) : -1].strip() for c in cols], dtype=object)
+        labels = np.array(
+            [tails[c][len(prefix) : -1].strip() for c in cols], dtype=object
+        )
         checked = df[cols].isin(_CHECKED).to_numpy()
         df[out_col] = [labels[row].tolist() for row in checked]
     return df
@@ -241,7 +247,9 @@ def compute_clinical_scales(df: pd.DataFrame) -> pd.DataFrame:
     # --- Crisis Risk Assessment (Q25 checkboxes & PHQ item 9: suicidal ideation) ---
     risks = df["crisis_risks_list"]
     phq9_positive = df["_phq_score_8"] > 0
-    df["has_crisis_risk"] = risks.map(lambda r: not CRISIS_TERMS.isdisjoint(r)) | phq9_positive
+    df["has_crisis_risk"] = (
+        risks.map(lambda r: not CRISIS_TERMS.isdisjoint(r)) | phq9_positive
+    )
     df["crisis_risk_flags"] = [
         [r for r in rs if r != "无"]
         + (["PHQ-9 自伤念头阳性"] if pos and "自伤意念" not in rs else [])
@@ -278,7 +286,12 @@ def track_longitudinal_patient_history(df: pd.DataFrame) -> pd.DataFrame:
 
     # Unique dropdown label: "姓名 (YYYY-mm-dd HH:MM)", suffixed " #n" on collisions
     names = df.get("姓名（实名）", pd.Series("", index=df.index)).replace("", "未知")
-    label = names.astype(str) + " (" + df["提交答卷时间"].dt.strftime("%Y-%m-%d %H:%M").fillna("-") + ")"
+    label = (
+        names.astype(str)
+        + " ("
+        + df["提交答卷时间"].dt.strftime("%Y-%m-%d %H:%M").fillna("-")
+        + ")"
+    )
     dup = label.groupby(label).cumcount()
     df["_label"] = label.where(dup == 0, label + " #" + (dup + 1).astype(str))
     return df
