@@ -6,61 +6,51 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
+from mappings import NOT_APPLICABLE_VALUE
+
+# String renderings that mean "missing" (shared with the vectorised pipeline)
+NULL_STRS = frozenset({"", "nan", "NaN", "NaT", "None", "<NA>"})
+# Survey jump-code / not-applicable markers (after stripping a trailing ".0")
+NA_STRS = frozenset({"-3", NOT_APPLICABLE_VALUE, "not applicable"})
+
 
 # ---------------------------------------------------------
 # Formatting & Extraction Helpers
 # ---------------------------------------------------------
 def phone_num_slicer(phone: str) -> str:
-    """Format a 11-digit phone number into 'XXX XXXX XXXX' format."""
-    phone = str(phone).strip()
-    phone_slice = [phone[:3], phone[3:7], phone[7:]]
-    return " ".join(phone_slice)
-
-
-def get_diagnoses(diagnosis_columns, person) -> list:
-    """Extract previous diagnoses marked as positive in the patient record."""
-    prev_diagnoses = []
-    for label in diagnosis_columns:
-        if person.get(label) == 1:
-            prev_diagnoses.append(label.split("(")[1].split(")")[0].strip())
-    return prev_diagnoses
+    """Format an 11-digit phone number as 'XXX XXXX XXXX'; return anything else unchanged."""
+    p = str(phone).strip()
+    return f"{p[:3]} {p[3:7]} {p[7:]}" if len(p) == 11 and p.isdigit() else p
 
 
 # ---------------------------------------------------------
 # Safe Parsing & Indexing Helpers for Forms
 # ---------------------------------------------------------
-def format_value(val, default="-", na_text="不适用") -> str:
+def safe_str(val, default=""):
+    """Return clean string, treating NaN / None / 'nan' / 'NaT' / '' as default."""
+    if val is None or pd.isna(val):
+        return default
+    s = str(val).strip()
+    return default if s in NULL_STRS else s
+
+
+def format_value(val, default="-", na_text=NOT_APPLICABLE_VALUE) -> str:
     """
     Format a survey or patient profile field for clean UI display.
     Treats NaN, None, 'nan', 'NaT', 'None', and empty string as default ('-').
     Treats -3, -3.0, '-3', '-3.0', '不适用' as na_text ('不适用').
     """
-    if val is None or (isinstance(val, float) and pd.isna(val)):
+    s = safe_str(val, default=None)
+    if s is None:
         return default
-    s = str(val).strip()
-    if s.endswith(".0"):
-        s = s[:-2]
-    if s in ("-3", "不适用", "not applicable"):
-        return na_text
-    if s in ("", "nan", "NaT", "None"):
-        return default
-    return s
-
-
-def safe_str(val, default=""):
-    """Return clean string, treating NaN / None / 'nan' / 'NaT' as default."""
-    if val is None or (isinstance(val, float) and pd.isna(val)):
-        return default
-    s = str(val).strip()
-    return default if s in ("nan", "NaT", "None", "") else s
+    s = s.removesuffix(".0")
+    return na_text if s in NA_STRS else s
 
 
 def parse_date(val):
     """Safely return a datetime.date object or None."""
-    if val is None or (isinstance(val, float) and pd.isna(val)):
-        return None
-    s = str(val).strip()
-    if s in ("", "nan", "NaT", "None"):
+    s = safe_str(val)
+    if not s:
         return None
     try:
         return pd.to_datetime(s).date()
@@ -70,9 +60,10 @@ def parse_date(val):
 
 def parse_multi(val, options: list) -> list:
     """Parse a comma-separated string into a list of valid options."""
-    if val is None or (isinstance(val, float) and pd.isna(val)):
+    s = safe_str(val)
+    if not s:
         return []
-    return [v.strip() for v in str(val).split(",") if v.strip() in options]
+    return [v.strip() for v in s.split(",") if v.strip() in options]
 
 
 def safe_index(options: list, val, default=0) -> int:
@@ -82,13 +73,6 @@ def safe_index(options: list, val, default=0) -> int:
         return options.index(s)
     except ValueError:
         return default
-
-
-# Backward compatibility aliases with underscore prefix
-_safe_str = safe_str
-_parse_date = parse_date
-_parse_multi = parse_multi
-_safe_index = safe_index
 
 
 # ---------------------------------------------------------
