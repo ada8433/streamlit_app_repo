@@ -1,6 +1,5 @@
 import datetime
 import io
-import re
 
 import pandas as pd
 import streamlit as st
@@ -169,10 +168,13 @@ if selected_recs:
     mask = pd.Series(False, index=filtered_df.index)
     if "未推荐/待定" in selected_recs:
         mask |= rec_s.isin(["", "-", "不适用"])
-    targets = [re.escape(t) for t in selected_recs if t != "未推荐/待定"]
+    targets = {t for t in selected_recs if t != "未推荐/待定"}
     if targets:
-        mask |= rec_s.str.contains("|".join(targets), regex=True)
+        # Exact token match (avoid "个体" matching "个体（周末）")
+        rec_tokens = rec_s.str.split(r"\s*[,，]\s*", regex=True)
+        mask |= rec_tokens.apply(lambda toks: bool(targets.intersection(toks)))
     filtered_df = filtered_df[mask]
+
 
 # 6. Filter By Marriage Status (婚姻情况)
 filtered_df = _sidebar_multiselect_filter(
